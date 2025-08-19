@@ -1,6 +1,6 @@
 import streamlit as st
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 from utils import chat, facility
@@ -9,18 +9,22 @@ from utils import chat, facility
 HERE = Path(__file__).parent
 IMAGES = HERE / "images"
 
-st.set_page_config(layout="wide", page_title="Pharma Facility Demo")
+st.set_page_config(layout="wide", page_title="Pharma Safety HMI Demo")
 
 # ---- Session init ----
 st.session_state.setdefault("current_room", None)
 st.session_state.setdefault("messages", [])
 st.session_state.setdefault("gas_data", [])
-st.session_state.setdefault("mapping_mode", False)  # <— toggle Mapping Mode
+st.session_state.setdefault("mapping_mode", False)
 
 # ---- Sidebar: global toggles ----
 with st.sidebar:
     st.markdown("### Tools")
-    st.session_state.mapping_mode = st.toggle("Detector Mapping Mode", value=st.session_state.mapping_mode, help="Click on the room image to add detector buttons at exact positions. Save to JSON when done.")
+    st.session_state.mapping_mode = st.toggle(
+        "Detector Mapping Mode",
+        value=st.session_state.mapping_mode,
+        help="Click on the room image to add detector buttons at exact positions. Save to JSON when done."
+    )
     if st.session_state.mapping_mode:
         st.info("Mapping Mode is ON — click on the image to drop detector pins. Use the Save button under the image.")
 
@@ -39,12 +43,16 @@ with col_nav:
         if st.button(f"Enter {rn}", key=f"nav_{rn}"):
             st.session_state["current_room"] = rn
 
-# 2) Center: Overview or Room with overlay
+# 2) Center: Overview (with hotspots) OR Room (with detector overlays)
 with col_view:
     if st.session_state["current_room"]:
-        facility.render_room(IMAGES, st.session_state["current_room"], mapping_mode=st.session_state.mapping_mode)
+        facility.render_room(
+            IMAGES,
+            st.session_state["current_room"],
+            mapping_mode=st.session_state.mapping_mode,
+        )
     else:
-        facility.render_overview(IMAGES)
+        facility.render_overview(IMAGES, enable_hotspots=True)
 
 # 3) Right: AI chat + Live gas (always visible)
 with col_ai:
@@ -73,7 +81,7 @@ with col_ai:
 
     fig, ax = plt.subplots()
     ax.plot(st.session_state["gas_data"], label="Gas level (ppm)")
-    ax.set_xlabel("Time (ticks)")
+    ax.set_xlabel("Time")
     ax.set_ylabel("ppm")
     ax.legend()
     st.pyplot(fig, use_container_width=True)
