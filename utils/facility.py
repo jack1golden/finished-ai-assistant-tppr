@@ -1,70 +1,7 @@
-import streamlit as st
-from pathlib import Path
 import base64
-
-# --- helper to convert image to base64 for inline display ---
-def get_base64_image(path: Path):
-    with open(path, "rb") as f:
-        data = f.read()
-    return base64.b64encode(data).decode()
-
-
-# --- facility overview (main blueprint) ---
-def render_overview(images_dir: Path):
-    st.image(
-        str(images_dir / "Overview.png"),
-        caption="Facility Overview",
-        use_container_width=True,
-    )
-
-
-# --- single room renderer with detector overlays ---
-def render_room(images_dir: Path, room: str):
-    img_path = images_dir / f"{room}.png"
-
-    if not img_path.exists():
-        st.warning(f"No image found for {room} at {img_path}")
-        return
-
-    img_base64 = get_base64_image(img_path)
-
-    # CSS/HTML overlay with detectors positioned manually
-    # Adjust percentages (top/left) per room later to match your detectors
-    html = f"""
-    <div style="position: relative; display: inline-block; width: 100%; border: 2px solid #0af; border-radius: 10px;">
-        <img src="data:image/png;base64,{img_base64}" style="width: 100%; height: auto; display: block;"/>
-
-        <!-- Example Detector 1 -->
-        <button onclick="window.parent.postMessage({{isStreamlitMessage: true, type: 'streamlit:setComponentValue', key: '{room}_det1', value: true}}, '*');"
-                style="position: absolute; top: 30%; left: 35%;
-                       background-color: rgba(255,0,0,0.8); color: white;
-                       font-weight: bold; border: none; border-radius: 6px;
-                       padding: 4px 10px; cursor: pointer;">
-            Detector 1
-        </button>
-
-        <!-- Example Detector 2 -->
-        <button onclick="window.parent.postMessage({{isStreamlitMessage: true, type: 'streamlit:setComponentValue', key: '{room}_det2', value: true}}, '*');"
-                style="position: absolute; top: 60%; left: 65%;
-                       background-color: rgba(0,0,255,0.8); color: white;
-                       font-weight: bold; border: none; border-radius: 6px;
-                       padding: 4px 10px; cursor: pointer;">
-            Detector 2
-        </button>
-    </div>
-    """
-
-    st.markdown(html, unsafe_allow_html=True)
-
-    # Show info if detector clicked
-    for det in ["det1", "det2"]:
-        key = f"{room}_{det}"
-        if key in st.session_state and st.session_state[key]:
-            st.success(f"✅ {room} → {det.upper()} selected")
-            st.session_state[key] = False  # reset after showing
-import streamlit as st
+import json
 from pathlib import Path
-import base64, json
+import streamlit as st
 import streamlit.components.v1 as components
 
 # ---------- helpers ----------
@@ -79,7 +16,7 @@ def _first_existing(images_dir: Path, names: list[str]) -> Path | None:
             return p
     return None
 
-# Rooms and their possible image filename candidates (second bundle first)
+# Rooms → candidate filenames (second bundle names included)
 ROOM_FILE_CANDIDATES = {
     "Entry":            ["Entry.png"],
     "Room 1":           ["Room 1.png"],
@@ -91,6 +28,17 @@ ROOM_FILE_CANDIDATES = {
 }
 
 OVERVIEW_CANDIDATES = ["Overview.png", "Overview (1).png"]
+
+# Optional hotspots on the overview (percent L, T, W, H).
+# These are placeholders; adjust to your Overview image later if needed.
+ROOM_HOTSPOTS = {
+    "Room 1":       (10, 15, 18, 18),
+    "Room 2":       (32, 15, 18, 18),
+    "Room 3":       (54, 15, 18, 18),
+    "Room 12/17":   (76, 15, 18, 18),
+    "Production":   (20, 48, 28, 25),
+    "Production 2": (52, 48, 28, 25),
+}
 
 # Detector map persistence
 def _map_path(images_dir: Path) -> Path:
@@ -118,13 +66,67 @@ def rooms_available(images_dir: Path) -> list[str]:
     return out
 
 # ---------- renderers ----------
-def render_overview(images_dir: Path):
+def render_overview(images_dir: Path, enable_hotspots: bool = True):
     img_path = _first_existing(images_dir, OVERVIEW_CANDIDATES)
     if not img_path:
         st.error("Overview image not found. Place 'Overview.png' (or 'Overview (1).png') in images/")
         return
-    st.image(str(img_path), caption="Facility Overview", use_container_width=True)
-    st.caption("Click a room from the left Navigation. (Hotspot overlay coming next.)")
+
+    if not enable_hotspots:
+        st.image(str(img_path), caption="Facility Overview", use_container_width=True)
+        return
+
+    # With hotspots overlayed
+    b64 = _b64(img_path)
+    # Build hotspot anchors (clicks -> postMessage enter_room)
+    hotspot_html = []
+    for rn, (L,T,W,H) in ROOM_HOTSPOTS.items():
+        if rn not in rooms_available(images_dir):
+            continue  # skip rooms without images
+        hotspot_html.append(
+            f"""
+            <a class="hotspot"
+               style="left:{L}%;top:{T}%;width:{W}%;height:{H}%;"
+               onclick="window.parent.postMessage({{isStreamlitMessage:true, type:'streamlit:setComponentValue', key:'enter_room', value:'{rn}'}}, '*'); return false;">
+               {rn}
+            </a>
+            """
+        )
+    hotspots_markup = "\n".join(hotspot_html)
+
+    html = f"""
+    <style>
+      .wrap {{
+        position: relative; width: min(1200px, 96%); margin: 10px auto 16px auto;
+        border-radius: 12px; border:1px solid #1f2a44; overflow:hidden;
+        box-shadow: 0 24px 80px rgba(0,0,0,.35);
+      }}
+      .wrap img {{ display:block; width:100%; height:auto; }}
+      .hotspot {{
+        position:absolute; display:flex; align-items:flex-start; justify-content:flex-start;
+        color:#67e8f9; font: 600 12px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+        border:1px dashed rgba(0,200,255,.35); border-radius:12px; padding:6px;
+        text-decoration:none; background: rgba(13, 25, 40, .06);
+      }}
+      .hotspot:hover {{ background: rgba(13, 25, 40, .16); }}
+      #fx {{ position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }}
+    </style>
+    <div class="wrap">
+      <img id="bg" src="data:image/png;base64,{b64}" alt="facility"/>
+      {hotspots_markup}
+    </div>
+    """
+
+    try:
+        components.html(html, height=760, scrolling=False)
+    except Exception as e:
+        st.error(f"❌ Error rendering overview: {e}")
+
+    # Handle hotspot click -> enter room
+    if "enter_room" in st.session_state and st.session_state["enter_room"]:
+        st.session_state["current_room"] = st.session_state["enter_room"]
+        st.session_state["enter_room"] = None
+        st.rerun()
 
 def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
     img_path = _first_existing(images_dir, ROOM_FILE_CANDIDATES.get(room, []))
@@ -141,7 +143,6 @@ def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
 
     # Build HTML with overlay buttons + (optional) mapping click-capture
     # We use a custom minimal component that posts clicks back to Streamlit via postMessage.
-    component_key = f"map_{room}"
 
     # Inject existing detector buttons
     btn_html = []
@@ -165,13 +166,13 @@ def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
         const r = img.getBoundingClientRect();
         const top = ( (ev.clientY - r.top) / r.height ) * 100;
         const left = ( (ev.clientX - r.left) / r.width ) * 100;
-        lastClick = {{top, left}};
+        lastClick = {{top: top, left: left}};
         // draw a temporary marker
         marker.style.display = 'block';
         marker.style.top = top + '%';
         marker.style.left = left + '%';
         // send to Streamlit
-        window.parent.postMessage({{isStreamlitMessage:true, type:'streamlit:setComponentValue', key:'{component_key}', value: JSON.stringify(lastClick)}}, '*');
+        window.parent.postMessage({{isStreamlitMessage:true, type:'streamlit:setComponentValue', key:'map_click_{room}', value: JSON.stringify(lastClick)}}, '*');
       }});
     """ if mapping_mode else ""
 
@@ -210,7 +211,10 @@ def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
     </script>
     """
 
-    components.html(html, height=720, scrolling=False, key=f"roomview_{room}")
+    try:
+        components.html(html, height=720, scrolling=False)
+    except Exception as e:
+        st.error(f"❌ Error rendering room overlay: {e}")
 
     # Read detector button clicks (uniquely keyed)
     for i, _ in enumerate(dets, start=1):
@@ -221,13 +225,12 @@ def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
 
     # Mapping controls
     if mapping_mode:
-        st.info("Click anywhere on the image to add a detector at that location. Then press **Add Detector** to append it to the list below, and **Save Mapping** when finished.")
+        st.info("Click anywhere on the image to add a detector at that location. Then press **Add Detector** to append it, and **Save Mapping** when finished.")
 
-        # The click handler posts JSON into this session_state key:
-        pending_key = f"map_{room}"
+        pending_key = f"map_click_{room}"
         pending = st.session_state.get(pending_key)
 
-        new_label = st.text_input("New detector label", value=f"{room} Detector {len(dets)+1}")
+        new_label = st.text_input("New detector label", value=f"{room} Detector {len(dets)+1}", key=f"label_{room}")
         colA, colB, colC = st.columns([1,1,3])
         with colA:
             if st.button("Add Detector", key=f"add_{room}"):
@@ -259,3 +262,4 @@ def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
                 st.write(f"{i}. {d['label']}  —  top: {d['top']:.2f}%, left: {d['left']:.2f}%")
         else:
             st.caption("No detectors mapped yet.")
+
