@@ -1,30 +1,29 @@
-import streamlit as st
 from pathlib import Path
+import streamlit as st
 import json
-from PIL import Image
+from PIL import Image, ImageDraw
 from streamlit_drawable_canvas import st_canvas
 
-# ---------------------------
-# Render Facility Overview
-# ---------------------------
+
 def render_overview(images_dir: Path):
-    img_path = images_dir / "Overview.png"
-    if not img_path.exists():
-        st.error("❌ Overview.png not found in images/")
-        return
+    """Render facility overview with clickable rooms"""
+    st.header("🏭 Facility Overview")
+    overview_path = images_dir / "Overview.png"
 
-    st.image(str(img_path), caption="Facility Overview", use_container_width=True)
+    if overview_path.exists():
+        st.image(str(overview_path), caption="Facility Overview", use_container_width=True)
+    else:
+        st.error("Overview.png not found in images folder!")
 
-    # Room navigation buttons (can be expanded)
-    rooms = ["Room 1", "Room 2", "Room 3", "Room 12 17", "Room Production", "Room Production 2"]
-    for rn in rooms:
-        if st.button(f"Enter {rn}", key=f"enter_{rn}"):
-            st.session_state.current_room = rn
+    rooms = [p.stem for p in images_dir.glob("Room*.png")]
+    for room in rooms:
+        if st.button(f"Enter {room}", key=f"enter_{room}"):
+            st.session_state["current_room"] = room
+            st.experimental_rerun()
 
-# ---------------------------
-# Render Individual Room
-# ---------------------------
+
 def render_room(images_dir: Path, room: str, mapping_mode=False):
+    """Render individual room with detectors and mapping option"""
     img_path = images_dir / f"{room}.png"
     if not img_path.exists():
         st.warning(f"No image found for {room}")
@@ -51,7 +50,7 @@ def render_room(images_dir: Path, room: str, mapping_mode=False):
         canvas = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=0,
-            background_image=str(img_path),  # ✅ FIXED: must be path, not PIL.Image
+            background_image=image,   # ✅ PIL image
             update_streamlit=True,
             height=image.height,
             width=image.width,
@@ -76,7 +75,22 @@ def render_room(images_dir: Path, room: str, mapping_mode=False):
     # Normal Mode
     # ---------------------------
     else:
-        st.image(str(img_path), caption=f"{room} View", use_container_width=True)
+        # Load original room image
+        image = Image.open(img_path).convert("RGBA")
+        overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        # Draw detectors if any
+        for i, det in enumerate(detectors):
+            x = int(det["x"] / 100 * image.width)
+            y = int(det["y"] / 100 * image.height)
+            r = 10
+            draw.ellipse((x-r, y-r, x+r, y+r), fill=(255, 0, 0, 180))
+            draw.text((x+12, y-12), f"D{i+1}", fill=(255, 0, 0, 255))
+
+        combined = Image.alpha_composite(image, overlay)
+
+        st.image(combined, caption=f"{room} View with Detectors", use_container_width=True)
 
         if not detectors:
             st.info("No detectors mapped in this room yet.")
@@ -85,5 +99,6 @@ def render_room(images_dir: Path, room: str, mapping_mode=False):
             for i, det in enumerate(detectors):
                 if st.button(f"Detector {i+1} ({det['x']:.1f}%, {det['y']:.1f}%)", key=f"{room}_det_{i}"):
                     st.success(f"📊 Showing data for Detector {i+1} in {room}")
+
 
 
