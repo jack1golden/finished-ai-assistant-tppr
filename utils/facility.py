@@ -1,155 +1,121 @@
 from pathlib import Path
-import json
-
-import numpy as np
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-from streamlit_drawable_canvas import st_canvas
 
+# =========================================================
+# HARD-CODED DETECTOR POSITIONS (percent of image width/height)
+# x, y are in percent (0-100). Label is what is drawn & shown.
+# Tweak these numbers to nudge the dot/label placement.
+# =========================================================
+DETECTOR_MAP = {
+    "Room 1": [                  # sketch: NH3 centered on the equipment block
+        {"label": "NH₃", "x": 55.0, "y": 55.0},
+    ],
+    "Room 2": [                  # sketch: CO on wall/pillar
+        {"label": "CO", "x": 52.0, "y": 50.0},
+    ],
+    "Room 3": [                  # sketch: detector near machinery (left)
+        {"label": "O₂", "x": 28.0, "y": 72.0},
+    ],
+    "Room 12 17": [              # sketch: Ethanol centered on long bench
+        {"label": "Ethanol", "x": 58.0, "y": 36.0},
+    ],
+    "Room Production": [         # sketch: NH3 on the upper run, O2 at lower-right
+        {"label": "NH₃", "x": 30.0, "y": 28.0},
+        {"label": "O₂",  "x": 78.0, "y": 72.0},
+    ],
+    "Room Production 2": [       # sketch: O2 on right, H2 also on right bank
+        {"label": "O₂", "x": 70.0, "y": 45.0},
+        {"label": "H₂", "x": 70.0, "y": 65.0},
+    ],
+}
 
-# ---------------------------
-# Facility Overview
-# ---------------------------
-def render_overview(images_dir: Path):
+# Rooms we show in the Overview nav (order)
+ROOM_ORDER = [
+    "Room 1",
+    "Room 2",
+    "Room 3",
+    "Room 12 17",
+    "Room Production",
+    "Room Production 2",
+]
+
+# ---------------------------------------------------------
+# Simple text shadow helper for readability on busy images
+# ---------------------------------------------------------
+def _draw_label(draw: ImageDraw.ImageDraw, xy, text, font, fill_main=(255, 72, 72, 255)):
+    x, y = xy
+    shadow = (0, 0, 0, 160)
+    # tiny shadow for readability
+    for dx, dy in ((1,1),(1,0),(0,1),(-1,0),(0,-1)):
+        draw.text((x+dx, y+dy), text, fill=shadow, font=font)
+    draw.text((x, y), text, fill=fill_main, font=font)
+
+# =========================================================
+# PUBLIC API
+# =========================================================
+def render_overview(images_dir: Path, enable_hotspots: bool = False):
+    """Show the overview image and navigation buttons."""
     st.header("🏭 Facility Overview")
     overview_path = images_dir / "Overview.png"
-
     if overview_path.exists():
         st.image(str(overview_path), caption="Facility Overview", use_container_width=True)
     else:
-        st.error("❌ Overview.png not found in images/")
-
-    # Auto-list rooms by filename like 'Room *.png'
-    rooms = sorted([p.stem for p in images_dir.glob("Room*.png")])
-    if not rooms:
-        st.caption("No room images found (files like 'Room 1.png', 'Room 2.png', ...).")
-        return
+        st.error("Overview.png not found in images/")
 
     st.markdown("### Rooms")
-    for room in rooms:
-        if st.button(f"Enter {room}", key=f"enter_{room}"):
-            st.session_state["current_room"] = room
-            st.experimental_rerun()
+    for rn in ROOM_ORDER:
+        img_path = images_dir / f"{rn}.png"
+        if img_path.exists():
+            if st.button(f"Enter {rn}", key=f"enter_{rn}"):
+                st.session_state["current_room"] = rn
+                st.experimental_rerun()
+        else:
+            st.caption(f"({rn} image missing)")
 
-
-# ---------------------------
-# Room View (mapping + normal)
-# ---------------------------
-def render_room(images_dir: Path, room: str, mapping_mode: bool = False):
-    """
-    In mapping_mode: click on image to set detector points; save to images/detector_map.json
-    In normal mode: draw detectors as red dots with labels on the image and show buttons below.
-    """
+def render_room(images_dir: Path, room: str):
+    """Render a room with hard-coded detector overlays and detector buttons."""
     img_path = images_dir / f"{room}.png"
     if not img_path.exists():
         st.warning(f"No image found for {room} at {img_path}")
         return
 
-    # Detector mapping file (persist positions here)
-    map_file = images_dir / "detector_map.json"
-    mapping = {}
-    if map_file.exists():
-        try:
-            mapping = json.loads(map_file.read_text())
-        except Exception:
-            mapping = {}
+    # Load background
+    bg = Image.open(img_path).convert("RGBA")
+    overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
 
-    detectors = mapping.get(room, [])  # list of dicts {x:%, y:% , label?:str}
+    # Font
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+    except Exception:
+        font = ImageFont.load_default()
 
-    if mapping_mode:
-        st.subheader("🛠 Detector Mapping Mode")
-        st.info("Click anywhere on the image to add detector positions, then press **Add Detector Here**. Click **Save Mapping** when done.")
+    # Get detectors for this room
+    dets = DETECTOR_MAP.get(room, [])
 
-        # Load image and convert to RGB numpy array for st_canvas
-        pil_img = Image.open(img_path).convert("RGB")
-        bg_np = np.array(pil_img)
+    # Draw red dots + labels
+    for i, d in enumerate(dets, start=1):
+        x_px = int(d["x"] / 100.0 * bg.width)
+        y_px = int(d["y"] / 100.0 * bg.height)
+        r = max(6, int(min(bg.width, bg.height) * 0.008))  # scale the dot a bit by image size
+        draw.ellipse((x_px - r, y_px - r, x_px + r, y_px + r), fill=(255, 72, 72, 220))
+        _draw_label(draw, (x_px + r + 6, y_px - r - 2), d["label"], font)
 
-        canvas = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.3)",
-            stroke_width=0,
-            background_image=bg_np,        # ✅ NumPy array (RGB)
-            update_streamlit=True,
-            height=bg_np.shape[0],
-            width=bg_np.shape[1],
-            drawing_mode="point",
-            key=f"canvas_{room}"
-        )
+    composed = Image.alpha_composite(bg, overlay)
+    st.image(composed, caption=f"{room} — detectors", use_container_width=True)
 
-        # Read last clicked point from the canvas JSON
-        last_pt = None
-        if canvas.json_data is not None and canvas.json_data.get("objects"):
-            obj = canvas.json_data["objects"][-1]
-            # Canvas returns absolute pixels; convert to percentages
-            x_pct = (obj["left"] / bg_np.shape[1]) * 100.0
-            y_pct = (obj["top"]  / bg_np.shape[0]) * 100.0
-            last_pt = {"x": x_pct, "y": y_pct}
-            st.write(f"📍 Clicked at: x={x_pct:.2f}%, y={y_pct:.2f}%")
-
-        # Controls to add/save
-        default_label = f"D{len(detectors)+1}"
-        new_label = st.text_input("Detector label", value=default_label, key=f"label_{room}")
-
-        colA, colB, _ = st.columns([1,1,4])
-        with colA:
-            if st.button("Add Detector Here", key=f"add_{room}_{len(detectors)}"):
-                if last_pt is None:
-                    st.warning("Click on the image first to pick a position.")
-                else:
-                    detectors.append({"x": float(last_pt["x"]), "y": float(last_pt["y"]), "label": new_label})
-                    mapping[room] = detectors
-                    map_file.write_text(json.dumps(mapping, indent=2))
-                    st.success("✅ Detector added & mapping saved.")
-                    st.experimental_rerun()
-        with colB:
-            if st.button("Save Mapping", key=f"save_{room}"):
-                mapping[room] = detectors
-                map_file.write_text(json.dumps(mapping, indent=2))
-                st.success("💾 Mapping saved to images/detector_map.json")
-
-        # Show current list
-        if detectors:
-            st.markdown("**Current detectors in this room:**")
-            for i, d in enumerate(detectors, start=1):
-                st.write(f"{i}. {d.get('label', f'D{i}')}: x={d['x']:.2f}%, y={d['y']:.2f}%")
-        else:
-            st.caption("No detectors mapped yet.")
-
+    # Buttons to interact with detectors (hook these to your charts/AI)
+    if dets:
+        st.markdown("### Detectors")
+        cols = st.columns(min(3, len(dets)))  # lay out a few per row
+        for i, d in enumerate(dets):
+            with cols[i % len(cols)]:
+                if st.button(f"{d['label']}", key=f"{room}_det_{i}"):
+                    st.success(f"📊 {room} → {d['label']} selected")
     else:
-        # Normal mode: show image + overlay dots + labels
-        pil_img = Image.open(img_path).convert("RGBA")
-        overlay = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
+        st.info("No detectors mapped for this room (hard-coded map is empty).")
 
-        # Optional: font for labels (fallback to default if not available)
-        try:
-            font = ImageFont.truetype("arial.ttf", 16)
-        except Exception:
-            font = None
-
-        for i, d in enumerate(detectors, start=1):
-            x = int(d["x"] / 100.0 * pil_img.width)
-            y = int(d["y"] / 100.0 * pil_img.height)
-            r = 10
-            draw.ellipse((x-r, y-r, x+r, y+r), fill=(255, 72, 72, 220))
-            label = d.get("label", f"D{i}")
-            # Draw label with a tiny shadow for readability
-            if font:
-                draw.text((x+12, y-14), label, fill=(255, 72, 72, 255), font=font)
-            else:
-                draw.text((x+12, y-14), label, fill=(255, 72, 72, 255))
-
-        combined = Image.alpha_composite(pil_img, overlay)
-        st.image(combined, caption=f"{room} View", use_container_width=True)
-
-        # Buttons under image for selecting detectors (hook these to charts later)
-        if detectors:
-            st.markdown("### Detectors")
-            for i, d in enumerate(detectors, start=1):
-                label = d.get("label", f"D{i}")
-                if st.button(f"Open {label}", key=f"{room}_det_{i}"):
-                    st.success(f"📊 Showing data for {label} in {room}")
-        else:
-            st.info("No detectors mapped in this room yet. Enable Mapping Mode to add some.")
 
 
 
