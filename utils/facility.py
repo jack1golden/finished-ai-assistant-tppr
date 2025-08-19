@@ -51,7 +51,7 @@ def render_room(images_dir: Path, room: str, mapping_mode=False):
         canvas = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=0,
-            background_image=image,
+            background_image=str(img_path),  # ✅ FIXED: must be path, not PIL.Image
             update_streamlit=True,
             height=image.height,
             width=image.width,
@@ -85,4 +85,5 @@ def render_room(images_dir: Path, room: str, mapping_mode=False):
             for i, det in enumerate(detectors):
                 if st.button(f"Detector {i+1} ({det['x']:.1f}%, {det['y']:.1f}%)", key=f"{room}_det_{i}"):
                     st.success(f"📊 Showing data for Detector {i+1} in {room}")
+
 
