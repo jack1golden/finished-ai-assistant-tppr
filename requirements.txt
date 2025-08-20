@@ -1,6 +1,4 @@
-matplotlib
-numpy
-streamlit
-Pillow
+streamlit>=1.31
+pillow>=10
+numpy>=1.24
 streamlit-drawable-canvas==0.9.3
-
