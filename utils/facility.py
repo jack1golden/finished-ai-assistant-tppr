@@ -1,127 +1,130 @@
 import base64
 from pathlib import Path
 import streamlit as st
+import streamlit.components.v1 as components
 from urllib.parse import quote
+from PIL import Image
 
-# -------------------------------------------------------------------
+# ----------------------------
 # Helpers
-# -------------------------------------------------------------------
-def load_image_b64(path: Path) -> str:
+# ----------------------------
+def _b64(path: Path) -> str:
+    """Return base64 string for an image file."""
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
+def _first_existing(images_dir: Path, names: list[str]) -> Path | None:
+    """Find first existing file in list of names inside images_dir."""
+    for n in names:
+        p = images_dir / n
+        if p.exists():
+            return p
+    return None
 
-# -------------------------------------------------------------------
-# Hardcoded mapping (adjust % values here)
-# -------------------------------------------------------------------
-OVERVIEW_HOTSPOTS = [
-    {"room": "Room 1", "left": 15, "top": 30, "width": 12, "height": 18},
-    {"room": "Room 2", "left": 45, "top": 35, "width": 12, "height": 18},
-    {"room": "Room 3", "left": 70, "top": 40, "width": 12, "height": 18},
-    {"room": "Room 4", "left": 25, "top": 70, "width": 12, "height": 18},
-    {"room": "Room 5", "left": 65, "top": 70, "width": 12, "height": 18},
+# ----------------------------
+# Room setup
+# ----------------------------
+ROOMS = [
+    "Room 1",
+    "Room 2",
+    "Room 3",
+    "Room 12 17",
+    "Room Production",
+    "Room Production 2",
 ]
 
-DETECTOR_MAP = {
-    "Room 1": [{"x": 35, "y": 35, "label": "NH₃"}],
-    "Room 2": [{"x": 40, "y": 50, "label": "Cl₂"}],
-    "Room 3": [{"x": 28, "y": 72, "label": "O₂"}],
-    "Room 4": [{"x": 60, "y": 40, "label": "CO"}],
-    "Room 5": [{"x": 55, "y": 60, "label": "CH₄"}],
+OVERVIEW_CANDIDATES = ["Overview.png", "Overview (1).png"]
+
+# Hotspot positions (left %, top %, width %, height %)
+OVERVIEW_HOTSPOTS = {
+    "Room 1": (10, 18, 16, 16),
+    "Room 2": (30, 18, 16, 16),
+    "Room 3": (50, 18, 16, 16),
+    "Room 12 17": (70, 18, 16, 16),
+    "Room Production": (22, 50, 26, 24),
+    "Room Production 2": (52, 50, 26, 24),
 }
 
-
-# -------------------------------------------------------------------
-# Facility overview renderer
-# -------------------------------------------------------------------
+# ----------------------------
+# Overview renderer
+# ----------------------------
 def render_overview(images_dir: Path):
-    img_path = images_dir / "Overview.png"
-    b64 = load_image_b64(img_path)
+    st.header("🏭 Facility Overview")
 
-    html = f"""
-    <style>
-      .wrap {{
-        position: relative; width: 100%; max-width: 1200px; margin: 10px auto;
-        border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
-        box-shadow: 0 24px 60px rgba(0,0,0,.30);
-      }}
-      .wrap img {{ width:100%; height:auto; display:block; }}
-      .hotspot {{
-        position:absolute; border:2px dashed rgba(56,189,248,0.9);
-        background:rgba(56,189,248,0.25); border-radius:8px;
-        text-align:center; font-weight:700; color:#0f172a;
-        display:flex; align-items:center; justify-content:center;
-        text-decoration:none; z-index:15;
-      }}
-      .hotspot:hover {{ background:rgba(56,189,248,0.45); }}
-    </style>
-    <div class="wrap">
-      <img src="data:image/png;base64,{b64}" alt="Facility Overview"/>
-    """
-
-    hotspots = []
-    for hs in OVERVIEW_HOTSPOTS:
-        L, T, W, H = hs["left"], hs["top"], hs["width"], hs["height"]
-        rn = hs["room"]
-        href = f"?room={quote(rn)}"
-        hotspots.append(f"""
-          <a class="hotspot" href="{href}" target="_top"
-             style="left:{L}%;top:{T}%;width:{W}%;height:{H}%;">
-            {rn}
-          </a>
-        """)
-
-    html += "\n".join(hotspots)
-    html += "</div>"
-
-    st.markdown(html, unsafe_allow_html=True)
-
-
-# -------------------------------------------------------------------
-# Single room renderer
-# -------------------------------------------------------------------
-def render_room(images_dir: Path, room: str):
-    img_file = f"{room}.png"
-    img_path = images_dir / img_file
-    if not img_path.exists():
-        st.error(f"❌ No image found for {room}")
+    ov = _first_existing(images_dir, OVERVIEW_CANDIDATES)
+    if not ov:
+        st.error("Overview image not found. Add 'Overview.png' or 'Overview (1).png' in images/.")
         return
 
-    b64 = load_image_b64(img_path)
-    dets = DETECTOR_MAP.get(room, [])
+    b64 = _b64(ov)
+
+    hotspots_html = []
+    for rn in ROOMS:
+        if rn not in OVERVIEW_HOTSPOTS:
+            continue
+        L, T, W, H = OVERVIEW_HOTSPOTS[rn]
+        href = f"?room={quote(rn)}"
+        hotspots_html.append(f"""
+          <a class="hotspot" href="{href}" target="_top"
+             style="left:{L}%;top:{T}%;width:{W}%;height:{H}%;">
+            <span>{rn}</span>
+          </a>
+        """)
+    hotspots = "\n".join(hotspots_html)
 
     html = f"""
     <style>
       .wrap {{
-        position: relative; width: 100%; max-width: 900px; margin: 10px auto;
-        border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
-        box-shadow: 0 16px 40px rgba(0,0,0,.25);
+        position: relative; width: min(1200px, 96%); margin: 10px auto 16px auto;
+        border-radius: 12px; border:1px solid #1f2a44; overflow:hidden;
+        box-shadow: 0 24px 80px rgba(0,0,0,.35);
       }}
-      .wrap img {{ width:100%; height:auto; display:block; }}
-      .pin {{
-        position:absolute; transform:translate(-50%,-50%);
-        background: rgba(239, 68, 68, .92); color: #fff; font-weight: 800;
-        border: 0; border-radius: 10px; padding: 6px 10px; cursor: pointer;
-        box-shadow: 0 10px 24px rgba(0,0,0,.35); text-decoration:none;
-        z-index:20;
+      .wrap img {{
+        display:block; width:100%; height:auto;
       }}
-      .pin:hover {{ filter: brightness(0.95); }}
+      .hotspot {{
+        position:absolute; display:flex; align-items:flex-start; justify-content:flex-start;
+        color:#e2e8f0; font: 700 12px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+        border:1px dashed rgba(0,200,255,.35); border-radius:12px; padding:6px;
+        text-decoration:none; background: rgba(13, 25, 40, .12);
+        z-index: 20;
+      }}
+      .hotspot:hover {{ background: rgba(13, 25, 40, .22); }}
+      .hotspot span {{
+        background: rgba(15,23,42,.65); padding: 2px 6px; border-radius: 8px;
+        border:1px solid rgba(103,232,249,.5);
+      }}
     </style>
     <div class="wrap">
-      <img src="data:image/png;base64,{b64}" alt="{room}"/>
+      <img src="data:image/png;base64,{b64}" alt="overview"/>
+      {hotspots}
+    </div>
     """
 
-    for d in dets:
-        x = float(d["x"]); y = float(d["y"]); label = d["label"]
-        href = f"?room={quote(room)}&det={quote(label)}"
-        html += f"""
-          <a class="pin" href="{href}" target="_top" style="left:{x}%;top:{y}%;">
-            {label}
-          </a>
-        """
+    components.html(html, height=760, scrolling=False)
 
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
+# ----------------------------
+# Room renderer
+# ----------------------------
+def render_room(images_dir: Path, room: str):
+    """Show a room image + detectors (hardcoded demo for now)."""
+    img_file = None
+    for ext in ["png", "jpg", "jpeg"]:
+        candidate = images_dir / f"{room}.{ext}"
+        if candidate.exists():
+            img_file = candidate
+            break
 
+    if not img_file:
+        st.warning(f"No image found for {room}")
+        return
 
+    st.subheader(f"🚪 {room}")
+    st.image(str(img_file), caption=room, use_container_width=True)
 
+    # Example detector (hardcoded coords for now)
+    if st.button(f"Detector in {room}"):
+        st.line_chart({"Gas": [0.1, 0.3, 0.7, 0.2, 0.5]})
+
+    if st.button("⬅️ Back to Overview"):
+        st.session_state["current_room"] = None
