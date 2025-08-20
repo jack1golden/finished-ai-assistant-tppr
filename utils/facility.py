@@ -1,7 +1,6 @@
 import json
 import base64
 import random
-import time
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -9,7 +8,6 @@ import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
-
 
 # ─────────────────────────────────────────────────────────
 # Static config
@@ -47,14 +45,12 @@ GAS_COLOUR = {
     "CH₄": "#f59e0b", "Ethanol": "#ef4444", "CO₂": "#06b6d4", "H₂S": "#eab308",
 }
 
-
 # ─────────────────────────────────────────────────────────
-# Utility helpers
+# Helpers
 # ─────────────────────────────────────────────────────────
 def _b64(path: Path) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
-
 
 def _first_existing(images_dir: Path, candidates: list[str]) -> Path | None:
     for name in candidates:
@@ -63,12 +59,10 @@ def _first_existing(images_dir: Path, candidates: list[str]) -> Path | None:
             return p
     return None
 
-
 def _mapping_paths(base_dir: Path) -> tuple[Path, Path]:
     # Store mappings at project root for persistence
     root = base_dir.parent
     return root / "mapping_overview.json", root / "mapping_rooms.json"
-
 
 def _load_mappings(images_dir: Path):
     ov_path, rm_path = _mapping_paths(images_dir)
@@ -80,16 +74,13 @@ def _load_mappings(images_dir: Path):
         rm = json.loads(rm_path.read_text())
     return ov, rm
 
-
 def _save_overview_mapping(images_dir: Path, mapping: dict):
     ov_path, _ = _mapping_paths(images_dir)
     ov_path.write_text(json.dumps(mapping, indent=2))
 
-
 def _save_room_mapping(images_dir: Path, mapping: dict):
     _, rm_path = _mapping_paths(images_dir)
     rm_path.write_text(json.dumps(mapping, indent=2))
-
 
 # ─────────────────────────────────────────────────────────
 # Defaults (used if no mapping_* JSON present)
@@ -120,13 +111,11 @@ DEFAULT_ROOM_DETECTORS = {
     ],
 }
 
-
 # ─────────────────────────────────────────────────────────
 # Live reading simulator (per detector)
 # ─────────────────────────────────────────────────────────
 def _sim_key(room: str, label: str) -> str:
     return f"{room}::{label}"
-
 
 def _next_value(room: str, label: str) -> float:
     key = _sim_key(room, label)
@@ -138,42 +127,33 @@ def _next_value(room: str, label: str) -> float:
     state[key] = v
     return v
 
-
 def _series(room: str, label: str, n: int = 60):
     key = _sim_key(room, label)
     buf = st.session_state.setdefault("det_buf", {}).setdefault(key, [])
-    # push one new value
     buf.append(_next_value(room, label))
     if len(buf) > n:
         buf[:] = buf[-n:]
     return buf
 
-
 # ─────────────────────────────────────────────────────────
 # Logo / Home
 # ─────────────────────────────────────────────────────────
 def render_logo(images_dir: Path):
-    """Show user-provided logo if present, else draw a minimal auto logo."""
     user_logo = images_dir / "logo.png"
     if user_logo.exists():
         st.image(str(user_logo), use_container_width=True)
         return
-
-    # Auto logo
+    # Minimal fallback
     W, H = 900, 260
     img = Image.new("RGBA", (W, H), (13, 17, 23, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((40, 60, 180, 220), 18, outline=(80, 200, 255), width=6)
-    d.rectangle((70, 110, 150, 140), outline=(80, 200, 255), width=4)
-    for i in range(6):
-        d.ellipse((200 + i * 22 - 4, 148 - 4, 200 + i * 22 + 4, 148 + 4), fill=(80, 200, 255))
     try:
         fnt = ImageFont.truetype("DejaVuSans-Bold.ttf", 36)
     except Exception:
         fnt = None
     d.text((40, 15), "Pharma Safety HMI — Innovation Project", fill=(200, 230, 255), font=fnt)
     st.image(img, use_container_width=True)
-
 
 # ─────────────────────────────────────────────────────────
 # Facility Overview (hotspots over image) + calibration
@@ -184,59 +164,57 @@ def render_overview(images_dir: Path, calibrate: bool = False, cal_room: str = "
         st.error("Overview image not found. Put 'Overview.png' (or 'Overview (1).png') in images/.")
         return
 
-    # Load mappings
-    ov_map, rm_map = _load_mappings(images_dir)
+    ov_map, _ = _load_mappings(images_dir)
     if ov_map is None:
         ov_map = DEFAULT_OV_HOTSPOTS.copy()
-    # Only show hotspots for rooms that have images
+
+    # Which rooms have images
     available = set(r for r in ROOMS if _first_existing(images_dir, ROOM_FILE_CANDIDATES.get(r, [])))
 
-    # Handle calibration click via query params (?ov_set=1&L=..&T=..)
+    # Handle calibration click (?ov_set=1&room=...&L=..&T=..)
     qp = st.query_params
-    if calibrate and "ov_set" in qp and qp.get("L") and qp.get("T") and qp.get("room"):
+    if calibrate and all(k in qp for k in ("ov_set", "room", "L", "T")):
         try:
-            L = float(qp["L"])
-            T = float(qp["T"])
-            rname = unquote(qp["room"])
-            # keep previous width/height if present
-            W, H = ov_map.get(rname, DEFAULT_OV_HOTSPOTS.get(rname, (12, 20, 15, 16)))[2:]
-            ov_map[rname] = (max(0, min(100, L)), max(0, min(100, T)), W, H)
+            L = float(qp["L"]); T = float(qp["T"])
+            rname = qp["room"]  # already encoded by JS; Streamlit decodes automatically
+            # preserve existing W/H
+            W, H = ov_map.get(rname, DEFAULT_OV_HOTSPOTS.get(rname, (12,20,15,16)))[2:]
+            ov_map[rname] = (max(0,min(100,L)), max(0,min(100,T)), W, H)
             _save_overview_mapping(images_dir, ov_map)
-            # Clear params to avoid repeat
             st.query_params.clear()
-            st.success(f"Saved Overview position for {rname}: left={L:.1f}%, top={T:.1f}%")
+            st.rerun()
         except Exception:
             pass
 
-    # Optional width/height fine-tune UI (only when calibrating)
+    # Optional size adjust UI
     if calibrate:
         room_list = list(ROOMS)
         st.markdown("#### Overview Calibration")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            rsel = st.selectbox("Room", room_list, index=room_list.index(cal_room) if cal_room in room_list else 0, key="ov_sel_room")
+            sel = st.selectbox("Room", room_list, index=room_list.index(cal_room) if cal_room in room_list else 0, key="ov_sel_room")
         with c2:
-            cur = ov_map.get(rsel, DEFAULT_OV_HOTSPOTS.get(rsel, (12, 20, 15, 16)))
+            cur = ov_map.get(sel, DEFAULT_OV_HOTSPOTS.get(sel, (12,20,15,16)))
             L, T, W, H = cur
             W = c2.slider("Width (%)", 5.0, 40.0, float(W), 0.5, key="ov_w_slider")
         with c3:
             H = c3.slider("Height (%)", 5.0, 40.0, float(H), 0.5, key="ov_h_slider")
         with c4:
             if st.button("💾 Save box size", key="ov_save_wh"):
-                ov_map[rsel] = (L, T, W, H)
+                ov_map[sel] = (L, T, W, H)
                 _save_overview_mapping(images_dir, ov_map)
-                st.success(f"Saved size for {rsel}: W={W:.1f}%, H={H:.1f}%")
+                st.success(f"Saved size for {sel}: W={W:.1f}%, H={H:.1f}%")
 
-    # Build hotspots HTML
+    # Build hotspots HTML (disable pointer-events when calibrating so clicks pass through)
     hotspot_tags = []
     for rn in ROOMS:
         if rn not in available:
             continue
-        L, T, W, H = ov_map.get(rn, DEFAULT_OV_HOTSPOTS.get(rn, (12, 20, 15, 16)))
+        L, T, W, H = ov_map.get(rn, DEFAULT_OV_HOTSPOTS.get(rn, (12,20,15,16)))
         href = f"?room={quote(rn)}"
         hotspot_tags.append(
             f"""
-            <a class="hotspot" href="{href}" target="_top"
+            <a class="hotspot {'cal' if calibrate else ''}" href="{href}" target="_top"
                style="left:{L}%; top:{T}%; width:{W}%; height:{H}%;">
               <span>{rn}</span>
             </a>
@@ -244,12 +222,13 @@ def render_overview(images_dir: Path, calibrate: bool = False, cal_room: str = "
         )
     tags = "\n".join(hotspot_tags)
 
-    # Click capture overlay when calibrating:
-    # clicking anywhere sets ?ov_set=1&room=<cal_room>&L=<pct>&T=<pct>
+    # Click-capture overlay for calibration
     click_overlay = ""
     if calibrate:
+        # Use JSON string to avoid double-encoding; encode in JS.
+        room_js = json.dumps(cal_room)
         click_overlay = f"""
-        <div id="ov_click" class="clickcatch"></div>
+        <div id="ov_click" class="clickcatch" title="Click to set the top/left of {cal_room}"></div>
         <script>
           (function(){{
             const cc = document.getElementById('ov_click');
@@ -257,8 +236,9 @@ def render_overview(images_dir: Path, calibrate: bool = False, cal_room: str = "
               const r = cc.getBoundingClientRect();
               const L = (ev.clientX - r.left) / r.width * 100.0;
               const T = (ev.clientY - r.top) / r.height * 100.0;
-              const room = encodeURIComponent("{quote(cal_room)}");
-              top.location.search = "?ov_set=1&room=" + room + "&L=" + L.toFixed(2) + "&T=" + T.toFixed(2);
+              const room = encodeURIComponent({room_js});
+              const qs = "?ov_set=1&room=" + room + "&L=" + L.toFixed(2) + "&T=" + T.toFixed(2);
+              try {{ window.parent.location.search = qs; }} catch(e) {{ window.top.location.search = qs; }}
             }});
           }})();
         </script>
@@ -284,8 +264,10 @@ def render_overview(images_dir: Path, calibrate: bool = False, cal_room: str = "
         background: rgba(15,23,42,.65); padding: 2px 6px; border-radius: 8px;
         border:1px solid rgba(103,232,249,.5);
       }}
+      .hotspot.cal {{ pointer-events: none; }}  /* allow clicks to pass to overlay while calibrating */
+
       .clickcatch {{
-        position:absolute; left:0; top:0; right:0; bottom:0; z-index: 10;
+        position:absolute; left:0; top:0; right:0; bottom:0; z-index: 9999;
         background: rgba(0,0,0,0); cursor: crosshair;
       }}
     </style>
@@ -297,7 +279,6 @@ def render_overview(images_dir: Path, calibrate: bool = False, cal_room: str = "
     """
     components.html(html, height=780, scrolling=False)
 
-
 # ─────────────────────────────────────────────────────────
 # Room view (detector buttons on image) + calibration + gas cloud
 # ─────────────────────────────────────────────────────────
@@ -308,64 +289,62 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
         return
 
     # Load mappings
-    ov_map, rm_map = _load_mappings(images_dir)
+    _, rm_map = _load_mappings(images_dir)
     if rm_map is None:
         rm_map = DEFAULT_ROOM_DETECTORS.copy()
 
-    # Ensure room list exists (fall back to defaults)
     dets = rm_map.get(room, DEFAULT_ROOM_DETECTORS.get(room, []))
 
-    # Calibration: click to place detector currently selected
+    # Handle calibration click (?rm_set=1&room=...&dlabel=...&x=..&y=..)
     qp = st.query_params
-    if calibrate and "rm_set" in qp and qp.get("x") and qp.get("y") and qp.get("dlabel") and qp.get("room"):
+    if calibrate and all(k in qp for k in ("rm_set", "room", "dlabel", "x", "y")):
         try:
             rx = float(qp["x"]); ry = float(qp["y"])
-            rname = unquote(qp["room"])
-            dlabel = unquote(qp["dlabel"])
-            # find or create detector entry
-            found = False
-            for d in dets:
+            rname = qp["room"]
+            dlabel = qp["dlabel"]
+            # upsert detector
+            updated = False
+            cur_dets = rm_map.get(rname, [])
+            for d in cur_dets:
                 if d["label"] == dlabel:
                     d["x"], d["y"] = rx, ry
-                    found = True
+                    updated = True
                     break
-            if not found:
-                dets.append({"label": dlabel, "x": rx, "y": ry})
-            rm_map[rname] = dets
+            if not updated:
+                cur_dets.append({"label": dlabel, "x": rx, "y": ry})
+            rm_map[rname] = cur_dets
             _save_room_mapping(images_dir, rm_map)
             st.query_params.clear()
-            st.success(f"Saved {dlabel} in {rname}: x={rx:.1f}%, y={ry:.1f}%")
+            st.rerun()
         except Exception:
             pass
 
-    # Left/Right columns layout
     colL, colR = st.columns([2, 1], gap="large")
 
-    # LEFT: image + detector buttons (and click capture if calibrating)
+    # LEFT: image + detector buttons
     with colL:
         gas = dets[0]["label"] if dets else "Ethanol"
         colour = GAS_COLOUR.get(gas, "#38bdf8")
 
-        # Build detector pins
+        # Build detector buttons
         pins_html = []
         for d in dets:
             lbl = d["label"]
-            # compute a "live" value just to display on the button text
             live = _next_value(room, lbl)
-            # choose units
             rng = GAS_RANGES.get(lbl, "")
-            units = "ppm"
+            # percent vs ppm display
             if "%" in rng:
-                # display percent-like value
                 display_val = f"{(19.5 + (live*0.05)):.1f} %"
             else:
                 display_val = f"{live:.0f} ppm"
 
             x = float(d["x"]); y = float(d["y"])
             href = f"?room={quote(room)}&det={quote(lbl)}"
+            # disable pointer-events in calibration so overlay can capture
+            cls = "detector-btn cal" if calibrate else "detector-btn"
             pins_html.append(
                 f"""
-                <a class="detector-btn" href="{href}" target="_top" style="left:{x}%; top:{y}%;">
+                <a class="{cls}" href="{href}" target="_top" style="left:{x}%; top:{y}%;">
                   <div class="lbl">{lbl}</div>
                   <div class="val">{display_val}</div>
                   <div class="rng">{rng}</div>
@@ -374,22 +353,23 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
             )
         pins = "\n".join(pins_html)
 
-        # When calibrating, click anywhere to move the currently selected detector
+        # Calibration overlay for room (choose detector in sidebar expander)
         click_js = ""
         if calibrate:
-            # default to first detector label if not set
-            det_label = st.session_state.get("cal_room_detector") or (dets[0]["label"] if dets else "NH₃")
-            st.session_state["cal_room_detector"] = det_label
+            # choose detector label to move
+            default_lbl = dets[0]["label"] if dets else "NH₃"
+            cur_lbl = st.session_state.get("cal_room_detector", default_lbl)
             with st.expander("⚙ Positioning (this room)", expanded=False):
-                labels_here = [d["label"] for d in dets] if dets else [det_label]
-                st.session_state["cal_room_detector"] = st.selectbox(
-                    "Detector to place", labels_here, key=f"sel_det_{room}"
-                )
-                st.caption("Click on the image to set the pin. Positions are saved as percentages of the image size.")
+                labels_here = [d["label"] for d in dets] if dets else [default_lbl]
+                cur_lbl = st.selectbox("Detector to place", labels_here, index=0 if default_lbl not in labels_here else labels_here.index(default_lbl), key=f"sel_det_{room}")
+                st.session_state["cal_room_detector"] = cur_lbl
+                st.caption("Click on the image to set the pin. (Pins are disabled while calibrating)")
 
-            dlabel_q = quote(st.session_state["cal_room_detector"])
+            room_js = json.dumps(room)
+            dlabel_js = json.dumps(cur_lbl)
             click_js = f"""
-            <div id="rm_click" class="clickcatch"></div>
+            <div id="rm_click" class="clickcatch" title="Click to set {cur_lbl}">
+            </div>
             <script>
               (function(){{
                 const cc = document.getElementById('rm_click');
@@ -397,15 +377,15 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
                   const r = cc.getBoundingClientRect();
                   const x = (ev.clientX - r.left) / r.width * 100.0;
                   const y = (ev.clientY - r.top) / r.height * 100.0;
-                  const dlabel = "{dlabel_q}";
-                  const room = "{quote(room)}";
-                  top.location.search = "?rm_set=1&room=" + room + "&dlabel=" + dlabel + "&x=" + x.toFixed(2) + "&y=" + y.toFixed(2);
+                  const room = encodeURIComponent({room_js});
+                  const dlabel = encodeURIComponent({dlabel_js});
+                  const qs = "?rm_set=1&room=" + room + "&dlabel=" + dlabel + "&x=" + x.toFixed(2) + "&y=" + y.toFixed(2);
+                  try {{ window.parent.location.search = qs; }} catch(e) {{ window.top.location.search = qs; }}
                 }});
               }})();
             </script>
             """
 
-        # Gas cloud animation + shutter if simulate=True
         auto_start = "true" if simulate else "false"
         html = f"""
         <style>
@@ -413,9 +393,6 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
             position: relative; width: 100%; max-width: 1200px; margin: 6px 0 10px 0;
             border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
             box-shadow: 0 24px 60px rgba(0,0,0,.30);
-            background:
-              repeating-linear-gradient( to right, rgba(100,116,139,.07) 0, rgba(100,116,139,.07) 1px, transparent 1px, transparent 5%),
-              repeating-linear-gradient( to bottom, rgba(100,116,139,.07) 0, rgba(100,116,139,.07) 1px, transparent 1px, transparent 5%);
           }}
           .wrap img {{ width:100%; height:auto; display:block; }}
 
@@ -424,12 +401,13 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
             padding: 6px 10px; border: 2px solid #22c55e; border-radius: 10px;
             background: #ffffff; color: #0f172a; font-weight: 800; text-align:center;
             text-decoration:none; box-shadow: 0 0 10px rgba(34,197,94,.35); z-index: 20;
-            min-width: 80px;
+            min-width: 88px;
           }}
-          .detector-btn .lbl {{ font-size: 14px; line-height: 1; }}
+          .detector-btn .lbl {{ font-size: 14px; line-height: 1.1; }}
           .detector-btn .val {{ font-size: 13px; font-weight: 700; opacity:.9; }}
           .detector-btn .rng {{ font-size: 11px; opacity:.7; }}
           .detector-btn:hover {{ background:#eaffea; }}
+          .detector-btn.cal {{ pointer-events: none; }}  /* disable during calibration */
 
           canvas.cloud {{
             position:absolute; left:0; top:0; width:100%; height:100%;
@@ -444,7 +422,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
           .shutter.active {{ transform:translateX(0%); }}
 
           .clickcatch {{
-            position:absolute; left:0; top:0; right:0; bottom:0; z-index: 10;
+            position:absolute; left:0; top:0; right:0; bottom:0; z-index: 9999;
             background: rgba(0,0,0,0); cursor: crosshair;
           }}
         </style>
@@ -485,7 +463,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
                 const y = canvas.height*0.55 + Math.sin(ang)*r*0.62;
                 const a = Math.max(0, 0.6 - i*0.02 - t*0.07);
                 ctx.beginPath();
-                ctx.fillStyle = "{GAS_COLOUR.get(gas, '#38bdf8')}" + Math.floor(a*255).toString(16).padStart(2,'0');
+                ctx.fillStyle = "{GAS_COLOUR.get('Ethanol', '#38bdf8')}" + Math.floor(a*255).toString(16).padStart(2,'0');
                 ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2);
                 ctx.fill();
               }}
@@ -510,7 +488,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
         """
         components.html(html, height=720, scrolling=False)
 
-    # RIGHT: live chart + AI chat (side-by-side behavior)
+    # RIGHT: live chart + AI chat
     with colR:
         det = st.session_state.get("selected_detector")
         if det is None:
@@ -529,23 +507,18 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, calibrate: 
             st.subheader("🤖 AI Safety Assistant")
             st.info(f"If {lbl} exceeds safe range, shutters will auto-close and evacuation is advised.")
 
-    # Reflect detector selection from query
+    # Reflect detector selection (?det=...)
     qp = st.query_params
     if "det" in qp:
         st.session_state["selected_detector"] = unquote(qp["det"])
 
-
 # ─────────────────────────────────────────────────────────
-# Settings page
+# Settings / AI chat pages
 # ─────────────────────────────────────────────────────────
 def render_settings():
     st.write("Add thresholds, units, and endpoints here. (Placeholder)")
     st.write("Mappings are saved to `mapping_overview.json` and `mapping_rooms.json` at the project root.")
 
-
-# ─────────────────────────────────────────────────────────
-# AI Chat page
-# ─────────────────────────────────────────────────────────
 def render_ai_chat():
     st.chat_message("ai").write("Hi, I’m your safety AI. Ask me about leaks, thresholds, or actions.")
     if p := st.chat_input("Ask the AI Safety Assistant…"):
@@ -554,7 +527,6 @@ def render_ai_chat():
             "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
             "verify detector calibrations and evacuate if O₂ < 19.5%."
         )
-
 
 
 
