@@ -27,7 +27,7 @@ def _ensure_state():
         st.session_state["detectors"] = {k: [d.copy() for d in v] for k, v in DETECTOR_MAP.items()}
 
 # =========================================================
-# Rooms & File Names
+# Rooms & Filenames
 # =========================================================
 ROOMS = [
     "Room 1", "Room 2", "Room 3",
@@ -46,9 +46,9 @@ ROOM_FILE_CANDIDATES = {
 }
 
 # =========================================================
-# DEFAULT POSITIONS (editable at runtime via tools below)
-# Hotspots: left, top, width, height (percent of image)
-# Detectors: x, y (percent of image)
+# FINAL, HARD-CODED POSITIONS (from your mapping.json)
+# Hotspots: left, top, width, height (percent)
+# Detectors: x, y (percent)
 # =========================================================
 OVERVIEW_HOTSPOTS = {
     "Room 1":            (12, 20, 15, 16),
@@ -61,8 +61,7 @@ OVERVIEW_HOTSPOTS = {
 
 DETECTOR_MAP = {
     "Room 1":            [{"label": "NH₃",     "x": 35.0, "y": 35.0}],
-    # moved to RIGHT wall above doorway
-    "Room 2":            [{"label": "CO",      "x": 93.0, "y": 33.0}],
+    "Room 2":            [{"label": "CO",      "x": 88.0, "y": 77.8}],
     "Room 3":            [{"label": "O₂",      "x": 28.0, "y": 72.0}],
     "Room 12 17":        [{"label": "Ethanol", "x": 58.0, "y": 36.0}],
     "Room Production":   [{"label": "NH₃",     "x": 30.0, "y": 28.0},
@@ -88,9 +87,10 @@ def rooms_available(images_dir: Path) -> list[str]:
     return out
 
 # =========================================================
-# OVERVIEW (with clickable hotspots + positioning tools)
+# Overview (clickable hotspots)
 # =========================================================
-def render_overview(images_dir: Path):
+def render_overview(images_dir: Path, tuner: bool = False):
+    """Render facility overview with fixed hotspots (tuner arg accepted for compatibility)."""
     _ensure_state()
 
     ov = _first_existing(images_dir, OVERVIEW_CANDIDATES)
@@ -98,49 +98,9 @@ def render_overview(images_dir: Path):
         st.error("Overview image not found. Put 'Overview.png' (or 'Overview (1).png') in images/.")
         return
 
-    hotspots = st.session_state["hotspots"]
+    hotspots = OVERVIEW_HOTSPOTS  # use hard-coded final mapping
     b64 = _b64(ov)
 
-    # --- Positioning tools ---
-    with st.expander("⚙ Positioning tools (Overview)", expanded=False):
-        lcol, rcol = st.columns([2, 1])
-        with lcol:
-            room_sel = st.selectbox("Select room to adjust", ROOMS, key="ov_room_sel")
-            step = st.slider("Step (%)", 0.1, 5.0, 1.0, 0.1, key="ov_step")
-            L, T, W, H = hotspots[room_sel]
-
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            if c1.button("⬅ Left", key="ov_left"):     L -= step
-            if c2.button("➡ Right", key="ov_right"):  L += step
-            if c3.button("⬆ Up", key="ov_up"):        T -= step
-            if c4.button("⬇ Down", key="ov_down"):    T += step
-            if c5.button("↔ Wider", key="ov_wider"):  W += step
-            if c6.button("↕ Taller", key="ov_taller"): H += step
-
-            # clamp
-            L = max(0.0, min(100.0, L))
-            T = max(0.0, min(100.0, T))
-            W = max(2.0, min(100.0, W))
-            H = max(2.0, min(100.0, H))
-            hotspots[room_sel] = (L, T, W, H)
-
-            st.caption(f"Current: left={L:.1f}%, top={T:.1f}%, width={W:.1f}%, height={H:.1f}%")
-
-        with rcol:
-            mapping = {
-                "hotspots": hotspots,
-                "detectors": st.session_state["detectors"],
-            }
-            st.download_button(
-                "📥 Download mapping.json",
-                data=json.dumps(mapping, indent=2),
-                file_name="mapping.json",
-                mime="application/json",
-                key="dl_map_overview"
-            )
-            st.info("Tune each room box over the facility. Use the grid to align (5% spacing).")
-
-    # --- Build hotspots HTML ---
     hotspot_tags = []
     for rn in ROOMS:
         if rn not in hotspots:
@@ -166,11 +126,9 @@ def render_overview(images_dir: Path):
         position: relative; width: min(1280px, 96%); margin: 8px auto 10px auto;
         border-radius: 12px; border:1px solid #1f2a44; overflow:hidden;
         box-shadow: 0 24px 80px rgba(0,0,0,.35);
-        background:
-          repeating-linear-gradient( to right, rgba(100,116,139,.10) 0, rgba(100,116,139,.10) 1px, transparent 1px, transparent 5%),
-          repeating-linear-gradient( to bottom, rgba(100,116,139,.10) 0, rgba(100,116,139,.10) 1px, transparent 1px, transparent 5%);
       }}
       .wrap img {{ display:block; width:100%; height:auto; }}
+
       .hotspot {{
         position:absolute; display:flex; align-items:flex-start; justify-content:flex-start;
         color:#e2e8f0; font: 700 12px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
@@ -192,9 +150,10 @@ def render_overview(images_dir: Path):
     components.html(html, height=780, scrolling=False)
 
 # =========================================================
-# ROOM (pins + gas animation + positioning tools)
+# Room (pins + gas cloud + shutter)
 # =========================================================
-def render_room(images_dir: Path, room: str, simulate: bool = False):
+def render_room(images_dir: Path, room: str, simulate: bool = False, tuner: bool = False):
+    """Render a single room with detector pins; tuner arg accepted for compatibility."""
     _ensure_state()
 
     img_path = _first_existing(images_dir, ROOM_FILE_CANDIDATES.get(room, []))
@@ -202,63 +161,30 @@ def render_room(images_dir: Path, room: str, simulate: bool = False):
         st.error(f"❌ No image found for {room}. Looked for: {ROOM_FILE_CANDIDATES.get(room, [])}")
         return
 
-    dets = st.session_state["detectors"].get(room, [])
-    b64 = _b64(img_path)
+    dets = DETECTOR_MAP.get(room, [])
+    if not dets:
+        st.info("No detectors mapped here yet.")
+    b64_img = _b64(img_path)
 
     gas = dets[0]["label"] if dets else "Ethanol"
-    cloud_color = GAS_COLOUR.get(gas, "#38bdf8")
-    auto_start = "true" if simulate else "false"
+    colour = GAS_COLOUR.get(gas, "#38bdf8")
 
-    # ---- Positioning tools (detectors) ----
-    with st.expander("⚙ Positioning tools (Detectors in this room)", expanded=False):
-        if not dets:
-            st.info("No detectors mapped here yet.")
-        else:
-            labels = [d["label"] for d in dets]
-            dname = st.selectbox("Select detector", labels, key=f"sel_det_{room}")
-            idx = labels.index(dname)
-            step = st.slider("Step (%)", 0.1, 5.0, 1.0, 0.1, key=f"det_step_{room}")
-            dx, dy = dets[idx]["x"], dets[idx]["y"]
-
-            c1, c2, c3, c4 = st.columns(4)
-            if c1.button("⬅ Left", key=f"det_left_{room}"):   dx -= step
-            if c2.button("➡ Right", key=f"det_right_{room}"): dx += step
-            if c3.button("⬆ Up", key=f"det_up_{room}"):       dy -= step
-            if c4.button("⬇ Down", key=f"det_down_{room}"):   dy += step
-
-            dx = max(0.0, min(100.0, dx))
-            dy = max(0.0, min(100.0, dy))
-            dets[idx]["x"], dets[idx]["y"] = dx, dy
-
-            st.caption(f"{dname}: x={dx:.1f}%, y={dy:.1f}%")
-            mapping = {"hotspots": st.session_state["hotspots"], "detectors": st.session_state["detectors"]}
-            st.download_button(
-                "📥 Download mapping.json",
-                data=json.dumps(mapping, indent=2),
-                file_name="mapping.json",
-                mime="application/json",
-                key=f"dl_map_room_{room}"
-            )
-            st.info("Use the grid to align pins. Positions are percentages of the image width/height.")
-
-    # ---- Build detector pins ----
+    # Build detector pins (clicking stays in same room and adds ?det=)
     pins_html = []
     for d in dets:
         x = float(d["x"]); y = float(d["y"]); label = d["label"]
         href = f"?room={quote(room)}&det={quote(label)}"
-        pins_html.append(f"""<a class="pin" href="{href}" target="_top" style="left:{x}%; top:{y}%;">{label}</a>""")
+        pins_html.append(
+            f"""<a class="pin" href="{href}" target="_top" style="left:{x}%; top:{y}%;">{label}</a>"""
+        )
     pins = "\n".join(pins_html)
 
-    # ---- Render with gas cloud + shutter + 5% grid ----
     html = f"""
     <style>
       .wrap {{
         position: relative; width: 100%; max-width: 1200px; margin: 6px 0 10px 0;
         border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
         box-shadow: 0 24px 60px rgba(0,0,0,.30);
-        background:
-          repeating-linear-gradient( to right, rgba(100,116,139,.10) 0, rgba(100,116,139,.10) 1px, transparent 1px, transparent 5%),
-          repeating-linear-gradient( to bottom, rgba(100,116,139,.10) 0, rgba(100,116,139,.10) 1px, transparent 1px, transparent 5%);
       }}
       .wrap img {{ width:100%; height:auto; display:block; }}
       .pin {{
@@ -280,7 +206,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False):
     </style>
 
     <div id="roomwrap" class="wrap">
-      <img id="roomimg" src="data:image/png;base64,{_b64(img_path)}" alt="{room}"/>
+      <img id="roomimg" src="data:image/png;base64,{b64_img}" alt="{room}"/>
       <canvas id="cloud" class="cloud"></canvas>
       <div id="shutter" class="shutter"></div>
       {pins}
@@ -312,9 +238,9 @@ def render_room(images_dir: Path, room: str, simulate: bool = False):
             const r = 20 + t*60 + i*8;
             const x = canvas.width*0.55 + Math.cos(ang)*r;
             const y = canvas.height*0.55 + Math.sin(ang)*r*0.62;
-            const alpha = Math.max(0, 0.6 - i*0.02 - t*0.07);
+            const a = Math.max(0, 0.6 - i*0.02 - t*0.07);
             ctx.beginPath();
-            ctx.fillStyle = "{GAS_COLOUR.get(gas, '#38bdf8')}" + Math.floor(alpha*255).toString(16).padStart(2,'0');
+            ctx.fillStyle = "{colour}" + Math.floor(a*255).toString(16).padStart(2,'0');
             ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2);
             ctx.fill();
           }}
@@ -343,5 +269,6 @@ def render_room(images_dir: Path, room: str, simulate: bool = False):
     qp = st.query_params
     if "det" in qp:
         st.session_state["current_detector"] = unquote(qp["det"])
+
 
 
