@@ -1,11 +1,11 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import random
-import time
 import matplotlib.pyplot as plt
 import numpy as np
 
+# -----------------------
 # Paths
+# -----------------------
 OVERVIEW_IMAGE = "images/Overview.png"
 ROOM_IMAGES = {
     "Room 1": "images/Room 1.png",
@@ -16,7 +16,10 @@ ROOM_IMAGES = {
     "Room 6": "images/Room 12 17.png",
 }
 
-# Hardcoded detector positions per room (percent-based)
+# -----------------------
+# Hardcoded Detectors
+# (replace with your JSON coords if you want real mapping)
+# -----------------------
 DETECTORS = {
     "Room 1": [{"label": "NH₃", "x": 35, "y": 35}],
     "Room 2": [{"label": "O₂", "x": 75, "y": 20}],
@@ -26,9 +29,9 @@ DETECTORS = {
     "Room 6": [{"label": "VOC", "x": 25, "y": 50}],
 }
 
-# ------------------------------
+# -----------------------
 # Render Overview
-# ------------------------------
+# -----------------------
 def render_overview():
     st.title("🏭 Facility Overview")
 
@@ -41,14 +44,12 @@ def render_overview():
     .map img {{
         max-width: 100%;
         height: auto;
-        border: 2px solid #444;
-        border-radius: 10px;
     }}
     .hotspot {{
         position: absolute;
         border: 2px solid green;
         border-radius: 8px;
-        background-color: rgba(0, 200, 0, 0.3);
+        background-color: rgba(0,200,0,0.3);
         color: white;
         font-weight: bold;
         text-align: center;
@@ -59,8 +60,6 @@ def render_overview():
 
     <div class="map">
       <img src="{OVERVIEW_IMAGE}" />
-
-      <!-- Hardcoded hotspots -->
       <a class="hotspot" href="?room=Room%201" style="left:15%;top:30%;width:12%;height:15%;">Room 1</a>
       <a class="hotspot" href="?room=Room%202" style="left:40%;top:30%;width:12%;height:15%;">Room 2</a>
       <a class="hotspot" href="?room=Room%203" style="left:65%;top:30%;width:12%;height:15%;">Room 3</a>
@@ -71,9 +70,9 @@ def render_overview():
     """
     components.html(html, height=600)
 
-# ------------------------------
+# -----------------------
 # Render Room
-# ------------------------------
+# -----------------------
 def render_room(room, detector=None):
     st.title(f"🚪 {room}")
 
@@ -87,8 +86,6 @@ def render_room(room, detector=None):
     .room img {{
         max-width: 100%;
         height: auto;
-        border: 2px solid #444;
-        border-radius: 10px;
     }}
     .detector {{
         position: absolute;
@@ -127,10 +124,9 @@ def render_room(room, detector=None):
         st.session_state["current_room"] = None
         st.session_state["current_detector"] = None
 
-
-# ------------------------------
+# -----------------------
 # Fake Live Chart
-# ------------------------------
+# -----------------------
 def render_live_chart(label):
     x = np.arange(0, 50)
     y = np.cumsum(np.random.randn(50)) + 50
@@ -142,6 +138,7 @@ def render_live_chart(label):
     ax.set_ylabel("Concentration (ppm)")
     ax.legend()
     st.pyplot(fig)
+
 
 
 
