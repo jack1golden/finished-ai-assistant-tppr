@@ -2,4 +2,5 @@ matplotlib
 numpy
 streamlit
 Pillow
-streamlit-drawable-canvas
+streamlit-drawable-canvas==0.9.3
+
