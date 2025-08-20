@@ -115,7 +115,7 @@ elif tab in ["Room 1", "Room 2", "Room 3", "Room 12 17", "Room Production", "Roo
             st.query_params.clear()  # clear URL params
             st.rerun()
 
-    facility.render_room(IMAGES, room, simulate=simulate_flag, tuner=st.session_state["tuner_enabled"])
+    facility.render_room(IMAGES, room, simulate=simulate_flag)
 
     det = st.session_state.get("current_detector")
     if det:
