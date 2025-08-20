@@ -1,25 +1,24 @@
 # app.py
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-
 import streamlit as st
 
 # ─────────────────────────────────────────────
-# Make sure we can import from ./utils
+# Resolve paths & force import from ./utils
 # ─────────────────────────────────────────────
 HERE = Path(__file__).parent.resolve()
+IMAGES = HERE / "images"
+IMAGES.mkdir(parents=True, exist_ok=True)
+
 UTILS_DIR = HERE / "utils"
+UTILS_DIR.mkdir(parents=True, exist_ok=True)
 if str(UTILS_DIR) not in sys.path:
     sys.path.insert(0, str(UTILS_DIR))
 
-# Prefer package import if utils is a package; otherwise fallback to module
-try:
-    from utils import facility  # type: ignore
-except Exception:
-    import facility  # type: ignore
+# Import the renamed module explicitly from utils/
+import facility_module as facility  # <- must exist at utils/facility_module.py
 
 # ─────────────────────────────────────────────
 # Page config & session defaults
@@ -33,9 +32,6 @@ st.session_state.setdefault("simulate_by_room", {})
 st.session_state.setdefault("cal_overview", False)
 st.session_state.setdefault("cal_room", False)
 st.session_state.setdefault("cal_overview_room", "Room 1")
-
-IMAGES = HERE / "images"
-IMAGES.mkdir(parents=True, exist_ok=True)
 
 # ─────────────────────────────────────────────
 # Sidebar navigation
