@@ -17,7 +17,6 @@ def _b64_of(path: Path) -> str:
 
 
 def _img64(path: Path) -> str:
-    # returns data URL
     return f"data:image/{path.suffix.lstrip('.').lower()};base64,{_b64_of(path)}"
 
 
@@ -45,21 +44,21 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
     return None
 
 
-# ---------- overview hotspots (percent coords, corrected again) ----------
+# ---------- overview hotspots (adjusted again with your corrections) ----------
 HOTSPOTS = {
-    "Room 1": dict(left=77, top=2, width=14, height=16),           # moved left +15%
-    "Room 2": dict(left=76, top=43, width=14, height=16),          # moved left +15%
-    "Room 3": dict(left=65, top=24, width=14, height=16),          # unchanged
-    "Room 12 17": dict(left=31, top=5, width=14, height=16),       # up +5%, right +2%
-    "Room Production": dict(left=24, top=33, width=24, height=22), # up +2%
-    "Room Production 2": dict(left=31, top=11, width=24, height=22), # down +5%, left +3%
+    "Room 1": dict(left=67, top=2, width=14, height=16),          # moved left +10%
+    "Room 2": dict(left=71, top=43, width=14, height=16),         # moved left +5%
+    "Room 3": dict(left=60, top=19, width=14, height=16),         # up +5%, left +5%
+    "Room 12 17": dict(left=36, top=0, width=14, height=16),      # up +5%, right +5%
+    "Room Production": dict(left=24, top=30, width=24, height=22), # up +3%
+    "Room Production 2": dict(left=26, top=9, width=24, height=22), # up +2%, left +5%
 }
 
 
-# ---------- detector buttons (percent coords) ----------
+# ---------- detector buttons ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
-    "Room 2": [dict(label="CO", x=93, y=33, units="ppm")],  # right wall above doorway
+    "Room 2": [dict(label="CO", x=93, y=33, units="ppm")],
     "Room 3": [dict(label="O₂", x=28, y=72, units="%")],
     "Room 12 17": [dict(label="Ethanol", x=58, y=36, units="ppm")],
     "Room Production": [
@@ -78,7 +77,7 @@ def _series_for(room: str, label: str, n: int = 60) -> list[float]:
     key = f"{room}::{label}"
     buf = st.session_state.setdefault("series", {}).setdefault(key, [])
     v = buf[-1] if buf else 50.0
-    v = max(0, v + np.random.randn() * 0.8)  # random walk
+    v = max(0, v + np.random.randn() * 0.8)
     buf.append(float(v))
     if len(buf) > n:
         buf[:] = buf[-n:]
