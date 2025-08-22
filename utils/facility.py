@@ -45,14 +45,14 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
     return None
 
 
-# ---------- overview hotspots (percent coords, adjusted by your request) ----------
+# ---------- overview hotspots (percent coords, corrected again) ----------
 HOTSPOTS = {
-    "Room 1": dict(left=92, top=2, width=14, height=16),            # right +80%, up +20%
-    "Room 2": dict(left=91, top=43, width=14, height=16),           # right +60%, down +20%
-    "Room 3": dict(left=65, top=24, width=14, height=16),           # right +15%
-    "Room 12 17": dict(left=29, top=10, width=14, height=16),       # up +15%, left +40%
-    "Room Production": dict(left=24, top=35, width=24, height=22),  # up +20%
-    "Room Production 2": dict(left=34, top=6, width=24, height=22), # up +50%, left +20%
+    "Room 1": dict(left=77, top=2, width=14, height=16),           # moved left +15%
+    "Room 2": dict(left=76, top=43, width=14, height=16),          # moved left +15%
+    "Room 3": dict(left=65, top=24, width=14, height=16),          # unchanged
+    "Room 12 17": dict(left=31, top=5, width=14, height=16),       # up +5%, right +2%
+    "Room Production": dict(left=24, top=33, width=24, height=22), # up +2%
+    "Room Production 2": dict(left=31, top=11, width=24, height=22), # down +5%, left +3%
 }
 
 
@@ -217,6 +217,7 @@ def render_room(images_dir: Path, room: str, selected_detector: str | None = Non
         st.divider()
         st.subheader("🤖 AI Safety Assistant")
         st.write("If a detector exceeds thresholds, shutters will close and extraction will increase.")
+
 
 
 
