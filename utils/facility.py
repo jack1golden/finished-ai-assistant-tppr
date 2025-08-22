@@ -1,4 +1,4 @@
-# utils/facility_module.py
+# utils/facility.py
 from __future__ import annotations
 
 import base64
@@ -11,49 +11,41 @@ import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 
-# ─────────────────────────────────────────────
-# Image helpers
-# ─────────────────────────────────────────────
+# ---------- helpers ----------
 def _b64(path: Path) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-def _first(images_dir: Path, names: list[str]) -> Path | None:
-    for n in names:
+def _first(images_dir: Path, candidates: list[str]) -> Path | None:
+    for n in candidates:
         p = images_dir / n
         if p.exists():
             return p
     return None
 
-# ─────────────────────────────────────────────
-# Assets / filenames
-# ─────────────────────────────────────────────
+# ---------- files ----------
 OVERVIEW_CANDIDATES = ["Overview.png", "Overview (1).png", "overview.png"]
-
 ROOM_FILE_CANDIDATES = {
     "Room 1": ["Room 1.png"],
     "Room 2": ["Room 2 (1).png", "Room 2.png"],
     "Room 3": ["Room 3 (1).png", "Room 3.png"],
-    "Room 12 17": ["Room 12 17.png", "Room 12.png"],
+    "Room 12 17": ["Room 12 17.png", "Room 12.png", "Room 17.png"],
     "Room Production": ["Room Production.png"],
     "Room Production 2": ["Room Production 2.png", "Room Production2.png"],
 }
 
-# ─────────────────────────────────────────────
-# HARD-CODED HOTSPOTS (percent) — tune if needed
-# ─────────────────────────────────────────────
+# ---------- overview hotspots (percent) ----------
+# Tweak these left/top/width/height numbers as needed to visually align.
 HOTSPOTS = {
-    "Room 1":        (12, 22, 14, 16),
-    "Room 2":        (31, 23, 14, 16),
-    "Room 3":        (50, 24, 14, 16),
-    "Room 12 17":    (69, 25, 14, 16),
-    "Room Production":   (24, 55, 24, 22),
-    "Room Production 2": (54, 56, 24, 22),
+    "Room 1":           (12, 22, 14, 16),
+    "Room 2":           (31, 23, 14, 16),
+    "Room 3":           (50, 24, 14, 16),
+    "Room 12 17":       (69, 25, 14, 16),
+    "Room Production":  (24, 55, 24, 22),
+    "Room Production 2":(54, 56, 24, 22),
 }
 
-# ─────────────────────────────────────────────
-# Detector mapping (percent)
-# ─────────────────────────────────────────────
+# ---------- detectors per room (percent) ----------
 GAS_RANGES = {
     "NH₃": "0–50 ppm",
     "CO": "0–200 ppm",
@@ -83,9 +75,7 @@ GAS_COLOUR = {
     "CH₄": "#f59e0b", "Ethanol": "#ef4444", "CO₂": "#06b6d4", "H₂S": "#eab308",
 }
 
-# ─────────────────────────────────────────────
-# Live-value simulator (per detector)
-# ─────────────────────────────────────────────
+# ---------- live series sim ----------
 def _sim_key(room: str, label: str) -> str:
     return f"{room}::{label}"
 
@@ -106,44 +96,38 @@ def _series(room: str, label: str, n: int = 60):
         buf[:] = buf[-n:]
     return buf
 
-# ─────────────────────────────────────────────
-# Logo / Home
-# ─────────────────────────────────────────────
+# ---------- logo ----------
 def render_logo(images_dir: Path):
     custom = images_dir / "logo.png"
     if custom.exists():
         st.image(str(custom), use_container_width=True)
         return
-    # minimal fallback
-    W, H = 900, 240
+    # fallback simple banner
+    W, H = 900, 220
     img = Image.new("RGB", (W, H), (17, 24, 39))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((30, 60, 200, 210), 20, outline=(80, 200, 255), width=5)
+    d.rounded_rectangle((30, 60, 200, 200), 22, outline=(80, 200, 255), width=5)
     try:
-        fnt = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+        fnt = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
     except Exception:
         fnt = None
-    d.text((250, 95), "Pharma Safety HMI — AI First", fill=(210, 230, 255), font=fnt)
+    d.text((250, 92), "Pharma Safety HMI — AI First", fill=(210, 230, 255), font=fnt)
     st.image(img, use_container_width=True)
 
-# ─────────────────────────────────────────────
-# Overview (hotspots over image)
-# ─────────────────────────────────────────────
+# ---------- overview ----------
 def render_overview(images_dir: Path):
     ov = _first(images_dir, OVERVIEW_CANDIDATES)
     if not ov:
-        st.error("Overview image not found. Add **images/Overview.png**.")
+        st.error("Overview image not found. Add **images/Overview.png** (or Overview (1).png).")
         return
 
-    # Only include rooms that have images
+    # Only show rooms that actually have images
     available = {r for r in HOTSPOTS.keys() if _first(images_dir, ROOM_FILE_CANDIDATES.get(r, []))}
 
-    # Build hotspots HTML
     hotspot_tags = []
-    for rn in HOTSPOTS.keys():
+    for rn, (L, T, W, H) in HOTSPOTS.items():
         if rn not in available:
             continue
-        L, T, W, H = HOTSPOTS[rn]
         href = f"?room={quote(rn)}"
         hotspot_tags.append(
             f"""
@@ -158,22 +142,21 @@ def render_overview(images_dir: Path):
     html = f"""
     <style>
       .wrap {{
-        position: relative; width: min(1280px, 96%); margin: 8px auto 10px auto;
-        border-radius: 12px; border:1px solid #1f2a44; overflow:hidden;
-        box-shadow: 0 24px 80px rgba(0,0,0,.35);
+        position:relative; width:min(1280px,96%); margin:8px auto 10px auto;
+        border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
+        box-shadow:0 18px 60px rgba(0,0,0,.35);
       }}
       .wrap img {{ display:block; width:100%; height:auto; }}
       .hotspot {{
-        position:absolute; display:flex; align-items:flex-start; justify-content:flex-start;
-        color:#e2e8f0; font: 700 12px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
-        border:2px solid rgba(34,197,94,.9); border-radius:12px; padding:4px 6px;
-        text-decoration:none; background: rgba(13, 25, 40, .18); z-index: 20;
+        position:absolute; border:2px solid rgba(34,197,94,.9); border-radius:10px;
+        background:rgba(16,185,129,.18); color:#e2e8f0; font-weight:800; font-size:12px;
+        display:flex; align-items:flex-start; justify-content:flex-start; padding:4px 6px; z-index:20;
+        text-decoration:none;
       }}
+      .hotspot:hover {{ background:rgba(16,185,129,.28); }}
       .hotspot span {{
-        background: rgba(15,23,42,.65); padding: 2px 6px; border-radius: 8px;
-        border:1px solid rgba(103,232,249,.5);
+        background:rgba(2,6,23,.55); border:1px solid rgba(103,232,249,.5); padding:2px 6px; border-radius:8px;
       }}
-      .hotspot:hover {{ background: rgba(13, 25, 40, .26); }}
     </style>
     <div class="wrap">
       <img src="data:image/png;base64,{_b64(ov)}" alt="overview"/>
@@ -182,9 +165,7 @@ def render_overview(images_dir: Path):
     """
     components.html(html, height=780, scrolling=False)
 
-# ─────────────────────────────────────────────
-# Room view (image + detector buttons + gas cloud + shutters)
-# ─────────────────────────────────────────────
+# ---------- room ----------
 def render_room(images_dir: Path, room: str, simulate: bool, selected_detector: str | None):
     img_path = _first(images_dir, ROOM_FILE_CANDIDATES.get(room, []))
     if not img_path:
@@ -195,8 +176,8 @@ def render_room(images_dir: Path, room: str, simulate: bool, selected_detector: 
 
     colL, colR = st.columns([2, 1], gap="large")
 
+    # LEFT (image + detector buttons + cloud + shutters)
     with colL:
-        # Build detector pins
         pins_html = []
         for d in dets:
             lbl = d["label"]
@@ -313,32 +294,30 @@ def render_room(images_dir: Path, room: str, simulate: bool, selected_detector: 
         """
         components.html(html, height=720, scrolling=False)
 
+    # RIGHT (chart + AI)
     with colR:
         det = selected_detector
-        if not det:
-            st.subheader("🤖 AI Safety Assistant")
-            if p := st.chat_input("Ask about leaks, thresholds or actions…"):
-                st.chat_message("user").write(p)
-                st.chat_message("ai").write(
-                    "Recommendation: close shutters; increase extraction; verify detector calibrations; "
-                    "evacuate if O₂ < 19.5%."
-                )
-        else:
+        if det:
             st.subheader(f"📈 {det} — Live trend")
             series = _series(room, det, n=90)
             st.line_chart({"reading": series})
             st.caption(f"Range: {GAS_RANGES.get(det, '—')}")
-
             st.divider()
-            st.subheader("🤖 AI Safety Assistant")
-            st.info(f"If {det} exceeds safe range, shutters will auto-close and evacuation is advised.")
+        else:
+            st.info("Click a detector badge on the image to view its live trend.")
 
-# ─────────────────────────────────────────────
-# Settings / AI pages
-# ─────────────────────────────────────────────
+        st.subheader("🤖 AI Safety Assistant")
+        if p := st.chat_input("Ask about leaks, thresholds or actions…"):
+            st.chat_message("user").write(p)
+            st.chat_message("ai").write(
+                "Recommendation: close shutters; increase extraction; verify detector calibrations; "
+                "evacuate if O₂ < 19.5%."
+            )
+
+# ---------- simple pages ----------
 def render_settings():
-    st.write("Add thresholds, units, and endpoints here. (Placeholder)")
-    st.write("All positions are hardcoded in this file (HOTSPOTS and DETECTORS).")
+    st.write("This is a placeholder. Thresholds, units, and endpoints would go here.")
+    st.write("Edit **HOTSPOTS** and **DETECTORS** dicts in utils/facility.py to adjust positions.")
 
 def render_ai_chat():
     st.chat_message("ai").write("Hi, I’m your safety AI. Ask me about leaks, thresholds, or actions.")
