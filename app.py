@@ -20,7 +20,7 @@ if str(UTILS_DIR) not in sys.path:
     sys.path.insert(0, str(UTILS_DIR))
 
 # Import rendering module
-import facility_module as facility  # utils/facility_module.py
+from utils import facility_module as facility
 
 # ─────────────────────────────────────────────
 # Page config & session defaults
