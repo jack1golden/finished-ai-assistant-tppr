@@ -55,7 +55,7 @@ DETECTORS = {
     ],
     # CO: was 88,38 → down +8% → y=46
     "Room 2": [
-    dict(label="CO", x=88, y=54, units="ppm"),
+    dict(label="CO", x=88, y=59, units="ppm"),
     ],
     "Room 3": [
         dict(label="O₂", x=5, y=44, units="%"),
