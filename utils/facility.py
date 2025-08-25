@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import base64
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 import numpy as np
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from . import ai  # AI brain (rule-based fallback if no key)
+import altair as alt
+
+from . import ai
+from . import history
 
 # ---------- helpers ----------
 def _b64_of(path: Path) -> str:
@@ -78,14 +83,14 @@ THRESHOLDS = {
 }
 
 GAS_COLORS = {
-    "NH₃": "#8b5cf6",     # purple
-    "CO": "#ef4444",      # red
-    "O₂": "#60a5fa",      # blue
-    "H₂S": "#eab308",     # yellow
-    "Ethanol": "#fb923c", # orange
+    "NH₃": "#8b5cf6",
+    "CO": "#ef4444",
+    "O₂": "#60a5fa",
+    "H₂S": "#eab308",
+    "Ethanol": "#fb923c",
 }
 
-# ---------- live series sim ----------
+# ---------- live series sim (for manual chart ticks) ----------
 def _sim_key(room: str, label: str) -> str:
     return f"{room}::{label}"
 
@@ -93,7 +98,7 @@ def _next_value(room: str, label: str) -> float:
     key = _sim_key(room, label)
     state = st.session_state.setdefault("det_sim", {})
     v = state.get(key, 10.0)
-    v += float(np.random.uniform(-0.4, 0.9))  # gentle random walk
+    v += float(np.random.uniform(-0.4, 0.9))
     v = max(0.0, v)
     state[key] = v
     return v
@@ -107,16 +112,6 @@ def _add_points(room: str, label: str, k: int = 5):
         buf[:] = buf[-180:]
     return buf
 
-def _series(room: str, label: str, n: int = 90):
-    key = _sim_key(room, label)
-    buf = st.session_state.setdefault("det_buf", {}).setdefault(key, [])
-    if not buf:
-        for _ in range(n):
-            buf.append(_next_value(room, label))
-    if len(buf) > n:
-        buf[:] = buf[-n:]
-    return buf
-
 def _status_for(label: str, value: float) -> tuple[str, str]:
     thr = THRESHOLDS.get(label)
     if not thr:
@@ -128,21 +123,48 @@ def _status_for(label: str, value: float) -> tuple[str, str]:
         if value <= thr["warn"]:
             return "WARN", f"{label} trending low ({value:.2f}{thr['units']}). Investigate consumption/airflow."
         return "OK", f"{label} normal ({value:.2f}{thr['units']})."
-    else:  # high
+    else:
         if value >= thr["alarm"]:
             return "ALARM", f"{label} high ({value:.2f}{thr['units']}). Close shutters, isolate, evacuate."
         if value >= thr["warn"]:
             return "WARN", f"{label} elevated ({value:.2f}{thr['units']}). Increase extraction, check for leaks."
         return "OK", f"{label} normal ({value:.2f}{thr['units']})."
 
+# ---------- initialize history once ----------
+history.init_if_needed(DETECTORS, days=7)
+
 # ======================================================
-# Overview
+# Overview with traffic‑light strip
 # ======================================================
+def _room_worst_status(room: str) -> str:
+    dets = DETECTORS.get(room, [])
+    worst = "OK"
+    for d in dets:
+        label = d["label"]
+        val = history.latest_value(room, label)
+        if val is None:
+            continue
+        s, _ = _status_for(label, val)
+        order = {"OK": 0, "WARN": 1, "ALARM": 2}
+        if order[s] > order[worst]:
+            worst = s
+            if worst == "ALARM":
+                break
+    return worst
+
+def _status_chip(room: str) -> str:
+    s = _room_worst_status(room)
+    color = {"OK":"#16a34a","WARN":"#f59e0b","ALARM":"#ef4444"}[s]
+    return f'<span class="chip" style="background:{color}">{room}: {s}</span>'
+
 def render_overview(images_dir: Path):
     ov_path = _find_first(images_dir, OVERVIEW_CANDS)
     if not ov_path:
         st.error("Overview image not found in /images.")
         return
+
+    # Traffic-light strip
+    chips = "".join(_status_chip(r) for r in ["Room 1","Room 2","Room 3","Room Production","Room Production 2","Room 12 17"])
 
     hotspots_html = []
     for room, box in HOTSPOTS.items():
@@ -167,6 +189,13 @@ def render_overview(images_dir: Path):
 
     html = f"""
     <style>
+      .strip {{
+        display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 10px 0;
+      }}
+      .chip {{
+        display:inline-block; color:#0b1220; font-weight:800; padding:6px 10px;
+        border-radius:999px; box-shadow:0 1px 6px rgba(0,0,0,.2);
+      }}
       .wrap {{
         position:relative; width:min(1280px,96%); margin:8px auto;
         border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
@@ -184,15 +213,16 @@ def render_overview(images_dir: Path):
         background:rgba(2,6,23,.55); border:1px solid rgba(103,232,249,.5); padding:2px 6px; border-radius:8px;
       }}
     </style>
+    <div class="strip">{chips}</div>
     <div class="wrap">
       <img src="{_img64(ov_path)}" alt="overview"/>
       {tags}
     </div>
     """
-    components.html(html, height=780, scrolling=False)
+    components.html(html, height=820, scrolling=False)
 
 # ======================================================
-# Room
+# Room view — timeline, predictive chart, AI auto‑log
 # ======================================================
 def render_room(
     images_dir: Path,
@@ -207,7 +237,6 @@ def render_room(
         return
 
     dets = DETECTORS.get(room, [])
-
     colL, colR = st.columns([2, 1], gap="large")
 
     # LEFT: image + detector buttons + gas cloud + shutter
@@ -337,10 +366,119 @@ def render_room(
         """
         components.html(room_html, height=720, scrolling=False)
 
-    # RIGHT: chart + AI (manual controls; no page auto-refresh)
+    # RIGHT: timeline, predictive chart, AI (with auto-event log)
     with colR:
         if selected_detector:
-            st.subheader(f"📈 {selected_detector} — Live trend")
+            # Timeline picker
+            st.subheader(f"📈 {selected_detector} — Trend")
+            period = st.radio(
+                "Range",
+                ["Last 10 min", "Last 1 h", "Today", "7 days"],
+                horizontal=True,
+                key=f"rng_{room}_{selected_detector}"
+            )
+            now = int(time.time())
+            if period == "Last 10 min":
+                start = now - 10*60
+            elif period == "Last 1 h":
+                start = now - 60*60
+            elif period == "Today":
+                # midnight
+                start = int(pd.Timestamp("today").replace(hour=0, minute=0, second=0).timestamp())
+            else:
+                start = now - 7*24*3600
+
+            # Fetch history (minutes) and build chart
+            df = history.fetch_series(room, selected_detector, start, now)
+            if df.empty:
+                st.info("No data for the selected range.")
+            else:
+                # Compute slope over last 15 minutes for projection
+                recent = df.tail(15)
+                slope = 0.0
+                if len(recent) >= 2:
+                    # minutes vs value
+                    x = (recent["t"].astype("int64")//10**9 - int(recent["t"].iloc[0].timestamp())) / 60.0
+                    y = recent["value"].to_numpy()
+                    slope = float(np.polyfit(x, y, 1)[0])
+
+                # Project next 5 minutes
+                proj_minutes = np.arange(1, 6)
+                if not df.empty:
+                    last_t = df["t"].iloc[-1]
+                    last_v = float(df["value"].iloc[-1])
+                    proj_t = [last_t + pd.Timedelta(minutes=int(m)) for m in proj_minutes]
+                    proj_v = [last_v + slope*m for m in proj_minutes]
+                    df_proj = pd.DataFrame({"t": proj_t, "value": proj_v, "kind":"Projected"})
+                    df_obs = df.assign(kind="Observed")
+                    df_all = pd.concat([df_obs, df_proj], ignore_index=True)
+                else:
+                    df_all = df.assign(kind="Observed")
+
+                gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
+                thr = THRESHOLDS.get(selected_detector, {})
+                base_chart = (
+                    alt.Chart(df_all)
+                    .mark_line()
+                    .encode(
+                        x=alt.X("t:T", title="Time"),
+                        y=alt.Y("value:Q", title=f"Reading ({thr.get('units','')})"),
+                        strokeDash=alt.condition(alt.datum.kind == "Projected",
+                                                 alt.value([4,4]), alt.value([0,0])),
+                        tooltip=[alt.Tooltip("t:T"), alt.Tooltip("value:Q", format=".2f"), "kind:N"],
+                        color=alt.Color("kind:N", scale=alt.Scale(range=[gas_color, gas_color]), legend=None),
+                    )
+                )
+
+                rules = []
+                if thr:
+                    # Warn & alarm guides
+                    rules.append(
+                        alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b").encode(y="y:Q")
+                    )
+                    rules.append(
+                        alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444").encode(y="y:Q")
+                    )
+                st.altair_chart(base_chart + sum(rules[1:], rules[0]) if rules else base_chart, use_container_width=True)
+
+                latest = float(df["value"].iloc[-1])
+                status, msg = _status_for(selected_detector, latest)
+                st.markdown(f"**Status:** {status}")
+                st.caption(msg)
+
+                # AI auto‑log on status change
+                key = _sim_key(room, selected_detector)
+                last_status = st.session_state.setdefault("last_status", {}).get(key)
+                if last_status != status:
+                    st.session_state["last_status"][key] = status
+                    mean, sd = history.stats(room, selected_detector, window_hours=24)
+                    crossing = None
+                    if thr:
+                        if thr["mode"] == "high" and latest >= thr["warn"]:
+                            crossing = 0 if latest >= thr["alarm"] else int(max(1, round((thr["alarm"]-latest)/max(slope,1e-3))))
+                        elif thr["mode"] == "low" and latest <= thr["warn"]:
+                            crossing = 0 if latest <= thr["alarm"] else int(max(1, round((latest-thr["alarm"])/max(-slope,1e-3))))
+                    prompt = f"Status changed to {status}. Provide actionable steps (max 4 bullets)."
+                    answer = ai.ask_ai(
+                        prompt,
+                        context={
+                            "room": room,
+                            "gas": selected_detector,
+                            "value": latest,
+                            "status": status,
+                            "thresholds": thr,
+                            "simulate": simulate,
+                            "recent_series": df["value"].tail(60).tolist(),
+                            "mean": mean,
+                            "std": sd,
+                            "projection_minutes": crossing
+                        },
+                        force_rule=ai_force_rule
+                    )
+                    log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                    log.append({"ts": int(time.time()), "text": answer})
+
+            # Manual data tickers for the live look
             cc1, cc2, cc3 = st.columns(3)
             if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
                 _add_points(room, selected_detector, 5)
@@ -348,53 +486,76 @@ def render_room(
             if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
                 _add_points(room, selected_detector, 15)
                 st.rerun()
-            if cc3.button("Spike", key=f"spike_{room}_{selected_detector}"):
-                for _ in range(5):
-                    _add_points(room, selected_detector, 1)
-                    st.session_state["det_sim"][_sim_key(room, selected_detector)] = \
-                        st.session_state["det_sim"].get(_sim_key(room, selected_detector), 10.0) + 5.0
+            if cc3.button("Spike (overlay)", key=f"spike_{room}_{selected_detector}"):
+                # Add spike into history for next 5 minutes to make it visible in timeline
+                now_ts = int(time.time())
+                history.inject_spike(room, selected_detector, when_ts=now_ts, duration_min=5, magnitude=5.0)
+                # Also nudge the session buffer for immediate visual feedback
+                _add_points(room, selected_detector, 5)
+                # AI narrate the spike
+                thr = THRESHOLDS.get(selected_detector, {})
+                mean, sd = history.stats(room, selected_detector, window_hours=24)
+                answer = ai.ask_ai(
+                    "Detected spike injected for demo. Summarize recommended immediate actions (3 bullets).",
+                    context={
+                        "room": room,
+                        "gas": selected_detector,
+                        "value": None,
+                        "status": "WARN",
+                        "thresholds": thr,
+                        "simulate": True,
+                        "mean": mean,
+                        "std": sd
+                    },
+                    force_rule=ai_force_rule
+                )
+                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                log.append({"ts": int(time.time()), "text": answer})
                 st.rerun()
 
-            series = _series(room, selected_detector, n=90)
-            st.line_chart({"reading": series})
-            latest = series[-1] if series else 0.0
-            status, msg = _status_for(selected_detector, latest)
-            st.markdown(f"**Status:** {status}")
-            st.caption(msg)
         else:
-            st.info("Click a detector badge on the image (or the backup buttons) to view its live trend.")
+            st.info("Click a detector badge on the image (or the backup buttons) to view its trend.")
 
         st.divider()
         st.subheader("🤖 AI Safety Assistant")
-        if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
-            st.chat_message("user").write(p)
+        if selected_detector:
+            if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
+                st.chat_message("user").write(p)
+                # Pull latest + stats for richer context
+                now = int(time.time())
+                df = history.fetch_series(room, selected_detector, now-3600, now)
+                latest = float(df["value"].iloc[-1]) if not df.empty else None
+                thr = THRESHOLDS.get(selected_detector, {})
+                mean, sd = history.stats(room, selected_detector, window_hours=24)
+                status = "OK"
+                if latest is not None and thr:
+                    status, _ = _status_for(selected_detector, latest)
 
-            latest = None
-            series = []
-            if selected_detector:
-                series = _series(room, selected_detector, n=90)
-                latest = series[-1] if series else None
-            gas_label = selected_detector or (dets[0]["label"] if dets else None)
-            thr = THRESHOLDS.get(gas_label, {})
+                answer = ai.ask_ai(
+                    p,
+                    context={
+                        "room": room,
+                        "gas": selected_detector,
+                        "value": latest,
+                        "status": status,
+                        "thresholds": thr,
+                        "simulate": simulate,
+                        "recent_series": df["value"].tail(60).tolist() if not df.empty else [],
+                        "mean": mean,
+                        "std": sd
+                    },
+                    force_rule=ai_force_rule
+                )
+                st.chat_message("ai").write(answer)
 
-            status = "OK"
-            if latest is not None and thr:
-                status, _ = _status_for(gas_label, latest)
+        # AI event log panel
+        log = st.session_state.setdefault("ai_log", {}).get(room, [])
+        if log:
+            st.write("---")
+            st.markdown("##### AI Event Log")
+            for e in reversed(log[-6:]):
+                st.markdown(f"- {pd.to_datetime(e['ts'], unit='s').strftime('%H:%M:%S')} — {e['text']}")
 
-            answer = ai.ask_ai(
-                p,
-                context={
-                    "room": room,
-                    "gas": gas_label,
-                    "value": latest,
-                    "status": status,
-                    "thresholds": thr,
-                    "simulate": simulate,
-                    "recent_series": series[-60:],
-                },
-                force_rule=ai_force_rule,
-            )
-            st.chat_message("ai").write(answer)
 
 
 
