@@ -60,7 +60,7 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (final placements you gave) ----------
+# ---------- detectors (your final placements) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO",  x=85, y=62, units="ppm")],
@@ -137,7 +137,7 @@ def _status_for(label: str, value: float) -> tuple[str, str]:
 history.init_if_needed(DETECTORS, days=7)
 
 # ======================================================
-# Overview with traffic‑light strip
+# Overview with traffic‑light strip + hotspots
 # ======================================================
 def _room_worst_status(room: str) -> str:
     dets = DETECTORS.get(room, [])
@@ -224,7 +224,7 @@ def render_room(
     dets = DETECTORS.get(room, [])
     colL, colR = st.columns([2, 1], gap="large")
 
-    # Build detector pins
+    # Build detector pins (✅ restored)
     pins_html = []
     for d in dets:
         lbl = d["label"]
@@ -252,7 +252,6 @@ def render_room(
     trigger_shutter = "true" if ops.get("close_shutter") else "false"
     trigger_vent = "true" if ops.get("ventilate") else "false"
     trigger_reset = "true" if ops.get("reset") else "false"
-    trigger_ack = "true" if ops.get("ack") else "false"
     auto_cloud = "true" if simulate else "false"
 
     with colL:
@@ -274,9 +273,9 @@ def render_room(
         <script>
           (function(){{
             const autoCloud = {auto_cloud};
-            const triggerShutter = {trigger_shutter};
-            const triggerVent = {trigger_vent};
-            const triggerReset = {trigger_reset};
+            const triggerShutter = {str(ops.get("close_shutter", False)).lower()};
+            const triggerVent = {str(ops.get("ventilate", False)).lower()};
+            const triggerReset = {str(ops.get("reset", False)).lower()};
             const canvas = document.getElementById("cloud");
             const wrap = document.getElementById("roomwrap");
             const sh = document.getElementById("shutter");
@@ -325,7 +324,6 @@ def render_room(
               ctx.clearRect(0,0,canvas.width,canvas.height);
             }}
             function closeShutter() {{
-              sh.classList.add('active');
               sh.style.transform = 'translateX(0%)';
               setTimeout(()=>{{ sh.style.transform = 'translateX(110%)'; }}, 6000);
             }}
@@ -338,7 +336,7 @@ def render_room(
         """
         components.html(room_html, height=720, scrolling=False)
 
-    # RIGHT side: timeline, predictive chart, AI + auto‑log + action logging
+    # RIGHT: timeline + predictive chart + AI + logs
     with colR:
         if selected_detector:
             st.subheader(f"📈 {selected_detector} — Trend")
@@ -362,7 +360,6 @@ def render_room(
             if df.empty:
                 st.info("No data for the selected range.")
             else:
-                # slope over last 15 minutes
                 recent = df.tail(15)
                 slope = 0.0
                 if len(recent) >= 2:
@@ -370,7 +367,6 @@ def render_room(
                     y = recent["value"].to_numpy()
                     slope = float(np.polyfit(x, y, 1)[0])
 
-                # 5‑minute projection
                 proj_minutes = np.arange(1, 6)
                 last_v = float(df["value"].iloc[-1])
                 last_t = df["t"].iloc[-1]
@@ -399,7 +395,6 @@ def render_room(
                     )
                 )
 
-                # Threshold rules
                 layers = [base_chart]
                 if thr:
                     warn_rule = alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b")
@@ -445,35 +440,36 @@ def render_room(
                     log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
                     log.append({"ts": int(time.time()), "text": answer})
 
-            # Manual data helpers (optional for demo feel)
+            # Manual data helpers (demo feel)
             cc1, cc2, cc3 = st.columns(3)
-            if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
-                _add_points(room, selected_detector, 5); st.rerun()
-            if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
-                _add_points(room, selected_detector, 15); st.rerun()
-            if cc3.button("Spike (overlay)", key=f"spike_{room}_{selected_detector}"):
-                now_ts = int(time.time())
-                history.inject_spike(room, selected_detector, when_ts=now_ts, duration_min=5, magnitude=5.0)
-                _add_points(room, selected_detector, 5)
-                thr = THRESHOLDS.get(selected_detector, {})
-                mean, sd = history.stats(room, selected_detector, window_hours=24)
-                answer = ai.ask_ai(
-                    "Detected spike injected for demo. Summarize recommended immediate actions (3 bullets).",
-                    context={
-                        "room": room,
-                        "gas": selected_detector,
-                        "value": None,
-                        "status": "WARN",
-                        "thresholds": thr,
-                        "simulate": True,
-                        "mean": mean,
-                        "std": sd
-                    },
-                    force_rule=ai_force_rule
-                )
-                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
-                log.append({"ts": int(time.time()), "text": answer})
-                st.rerun()
+            if selected_detector:
+                if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
+                    _add_points(room, selected_detector, 5); st.rerun()
+                if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
+                    _add_points(room, selected_detector, 15); st.rerun()
+                if cc3.button("Spike (overlay)", key=f"spike_{room}_{selected_detector}"):
+                    now_ts = int(time.time())
+                    history.inject_spike(room, selected_detector, when_ts=now_ts, duration_min=5, magnitude=5.0)
+                    _add_points(room, selected_detector, 5)
+                    thr = THRESHOLDS.get(selected_detector, {})
+                    mean, sd = history.stats(room, selected_detector, window_hours=24)
+                    answer = ai.ask_ai(
+                        "Detected spike injected for demo. Summarize recommended immediate actions (3 bullets).",
+                        context={
+                            "room": room,
+                            "gas": selected_detector,
+                            "value": None,
+                            "status": "WARN",
+                            "thresholds": thr,
+                            "simulate": True,
+                            "mean": mean,
+                            "std": sd
+                        },
+                        force_rule=ai_force_rule
+                    )
+                    log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                    log.append({"ts": int(time.time()), "text": answer})
+                    st.rerun()
         else:
             st.info("Click a detector badge on the image (or use the selector above) to view its trend.")
 
@@ -486,7 +482,6 @@ def render_room(
                 df = history.fetch_series(room, selected_detector, now-3600, now)
                 latest = float(df["value"].iloc[-1]) if not df.empty else None
                 thr = THRESHOLDS.get(selected_detector, {})
-                mean, sd = history.stats(room, selected_detector, window_hours=24)
                 status = "OK"
                 if latest is not None and thr:
                     status, _ = _status_for(selected_detector, latest)
@@ -501,8 +496,8 @@ def render_room(
                         "thresholds": thr,
                         "simulate": simulate,
                         "recent_series": df["value"].tail(60).tolist() if not df.empty else [],
-                        "mean": mean,
-                        "std": sd
+                        "mean": history.stats(room, selected_detector, 24)[0],
+                        "std": history.stats(room, selected_detector, 24)[1],
                     },
                     force_rule=ai_force_rule
                 )
@@ -578,6 +573,7 @@ def export_incident_html(logs: dict, brand: dict | None = None) -> str:
             )
     html_parts.append("</body></html>")
     return "\n".join(html_parts)
+
 
 
 
