@@ -394,7 +394,7 @@ def render_room(
                 )
                 rules = []
                 if thr:
-                    rules.append(alt
+                    rules.append(alt)
 
 
 
