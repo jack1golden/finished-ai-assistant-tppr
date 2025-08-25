@@ -27,8 +27,8 @@ ROOM_FILES = {
     "Room 2": ["Room 2 (1).png", "Room 2.png"],
     "Room 3": ["Room 3 (1).png", "Room 3.png"],
     "Room Production": ["Room Production.png"],
-    "Room Production 2": ["Room Production 2.png", "Room Production2.png"],
-    "Room 12 17": ["Room 12 17.png", "Room 12.png", "Room 17.png"],
+    "Room Production 2": ["Room Production 2.png"],
+    "Room 12 17": ["Room 12 17.png"],
 }
 
 def _find_first(images_dir: Path, names: list[str]) -> Path | None:
@@ -38,7 +38,7 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
             return p
     return None
 
-# ---------- overview hotspots (your latest + size adjust where asked) ----------
+# ---------- overview hotspots ----------
 HOTSPOTS = {
     "Room 1": dict(left=63, top=2, width=14, height=16),
     "Room 2": dict(left=67, top=43, width=14, height=16),
@@ -48,28 +48,19 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3, width=23, height=21),
 }
 
-# ---------- detectors ----------
-GAS_RANGES = {
-    "NH₃": "0–50 ppm",
-    "CO": "0–200 ppm",
-    "O₂": "19–23 %",
-    "CH₄": "0–100 %LEL",
-    "H₂S": "0–100 ppm",
-    "Ethanol": "0–1000 ppm",
-}
-
+# ---------- detectors (with your latest fixes) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO", x=93, y=33, units="ppm")],
-    "Room 3": [dict(label="O₂", x=28, y=72, units="%")],
-    "Room 12 17": [dict(label="Ethanol", x=58, y=36, units="ppm")],
+    "Room 3": [dict(label="O₂", x=28 - 25, y=72 - 25, units="%")],  # moved up 25%, left 25%
+    "Room 12 17": [dict(label="Ethanol", x=58 + 5, y=36 - 5, units="ppm")],  # up 5%
     "Room Production": [
-        dict(label="O₂", x=78, y=72, units="%"),
-        dict(label="NH₃", x=30, y=28, units="ppm"),
+        dict(label="O₂", x=78 + 10, y=72 - 30, units="%"),   # up 30%, right 10%
+        dict(label="NH₃", x=30 - 8, y=28, units="ppm"),      # left 8%
     ],
     "Room Production 2": [
-        dict(label="O₂", x=70, y=45, units="%"),
-        dict(label="H₂S", x=70, y=65, units="ppm"),
+        dict(label="O₂", x=70 + 5, y=45, units="%"),         # right 5%
+        dict(label="H₂S", x=70 - 50, y=65 - 30, units="ppm"),# left 50%, up 30%
     ],
 }
 
@@ -103,21 +94,13 @@ def render_overview(images_dir: Path):
         st.error("Overview image not found in /images.")
         return
 
-    available = {}
-    for room, cands in ROOM_FILES.items():
-        p = _find_first(images_dir, cands)
-        if p:
-            available[room] = p
-
     hotspots_html = []
     for room, box in HOTSPOTS.items():
-        if room not in available:
-            continue
-        # write both room and nav in the URL for robustness with tabs
         href = f"?room={quote(room)}&nav={quote(room)}"
         hotspots_html.append(
             f"""
             <a class="hotspot" data-room="{room}" href="{href}" target="_top"
+               onclick="try{{window.parent.location.search='room='+encodeURIComponent('{room}')+'&nav='+encodeURIComponent('{room}');}}catch(e){{window.top.location.search='room='+encodeURIComponent('{room}')+'&nav='+encodeURIComponent('{room}');}} return false;"
                style="left:{box['left']}%;top:{box['top']}%;width:{box['width']}%;height:{box['height']}%;">
               <span>{room}</span>
             </a>
@@ -140,9 +123,6 @@ def render_overview(images_dir: Path):
         text-decoration:none;
       }}
       .hotspot:hover {{ background:rgba(16,185,129,.28); }}
-      .hotspot span {{
-        background:rgba(2,6,23,.55); border:1px solid rgba(103,232,249,.5); padding:2px 6px; border-radius:8px;
-      }}
     </style>
     <div class="wrap">
       <img src="{_img64(ov_path)}" alt="overview"/>
@@ -155,9 +135,6 @@ def render_overview(images_dir: Path):
 # Room
 # ======================================================
 def render_room(images_dir: Path, room: str, simulate: bool = False, selected_detector: str | None = None):
-    """
-    simulate: currently reserved (future gas-cloud animation). Safe to pass; ignored for now.
-    """
     room_path = _find_first(images_dir, ROOM_FILES.get(room, []))
     if not room_path:
         st.error(f"No image found for {room} in /images.")
@@ -174,7 +151,9 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         href = f"?room={quote(room)}&det={quote(lbl)}&nav={quote(room)}"
         pins_html.append(
             f"""
-            <a class="detector" href="{href}" target="_top" style="left:{d['x']}%;top:{d['y']}%;">
+            <a class="detector" href="{href}" target="_top"
+               onclick="try{{window.parent.location.search='room='+encodeURIComponent('{room}')+'&det='+encodeURIComponent('{lbl}')+'&nav='+encodeURIComponent('{room}');}}catch(e){{window.top.location.search='room='+encodeURIComponent('{room}')+'&det='+encodeURIComponent('{lbl}')+'&nav='+encodeURIComponent('{room}');}} return false;"
+               style="left:{d['x']}%;top:{d['y']}%;">
               <div class="lbl">{lbl}</div>
             </a>
             """
@@ -212,7 +191,6 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             st.subheader(f"📈 {selected_detector} — Live trend")
             series = _series(room, selected_detector, n=90)
             st.line_chart({"reading": series})
-            st.caption(f"Range: {GAS_RANGES.get(selected_detector, '—')}")
         else:
             st.info("Click a detector badge on the image to view its live trend.")
         st.divider()
@@ -226,7 +204,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
 
 # ---------- simple pages ----------
 def render_settings():
-    st.write("Thresholds, units, and integrations will live here. Positions are hardcoded in this file.")
+    st.write("Thresholds, units, and integrations will live here.")
 
 def render_ai_chat():
     st.chat_message("ai").write("Hi, I’m your safety AI. Ask me about leaks, thresholds, or actions.")
