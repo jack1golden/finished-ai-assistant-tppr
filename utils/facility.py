@@ -93,6 +93,15 @@ GAS_COLORS = {
     "Ethanol": "#fb923c", # orange
 }
 
+# Honeywell recommended detectors (simple mapping for demo)
+HONEYWELL_REC = {
+    "NH₃": "Honeywell Sensepoint XCD (NH₃) or XNX + EC‑Tox (NH₃)",
+    "CO": "Honeywell Sensepoint XCD (CO) or XNX + EC‑Tox (CO)",
+    "O₂": "Honeywell Sensepoint XCD (O₂) or XNX + EC‑O₂",
+    "H₂S": "Honeywell Sensepoint XCD (H₂S) or XNX + EC‑Tox (H₂S)",
+    "Ethanol": "Honeywell Sensepoint XCD (VOC) or XNX + PID",
+}
+
 # ---------- live series sim (for manual chart ticks) ----------
 def _sim_key(room: str, label: str) -> str:
     return f"{room}::{label}"
@@ -137,7 +146,7 @@ def _status_for(label: str, value: float) -> tuple[str, str]:
 history.init_if_needed(DETECTORS, days=7)
 
 # ======================================================
-# Overview with traffic‑light strip + hotspots (iframe-safe)
+# Overview with hotspots (iframe-safe & bridge click)
 # ======================================================
 def _room_worst_status(room: str) -> str:
     dets = DETECTORS.get(room, [])
@@ -170,18 +179,10 @@ def render_overview(images_dir: Path):
 
     hotspots_html = []
     for room, box in HOTSPOTS.items():
-        href = f"?room={quote(room)}"
         hotspots_html.append(
             f"""
-            <a class="hotspot" data-room="{room}" href="{href}" target="_top"
-               onclick="
-                 try {{
-                   const base = window.top.location.pathname;
-                   window.top.location.href = base + '?room=' + encodeURIComponent('{room}');
-                 }} catch(e) {{
-                   window.location.search = 'room=' + encodeURIComponent('{room}');
-                 }}
-                 return false;"
+            <a class="hotspot" data-room="{room}" href="#"
+               onclick="window.parent.postMessage({{type:'setQS', room:'{room}', det:null}}, '*'); return false;"
                style="position:absolute; left:{box['left']}%; top:{box['top']}%; width:{box['width']}%; height:{box['height']}%;
                       border:2px solid rgba(34,197,94,.95); border-radius:10px;
                       background:rgba(16,185,129,.22); color:#0b1220; font-weight:800; font-size:12px;
@@ -213,7 +214,7 @@ def render_overview(images_dir: Path):
     components.html(html, height=820, scrolling=False)
 
 # ======================================================
-# Room view — image + badges + gas cloud/shutter + timeline + predictive chart + AI + auto‑log
+# Room view — image + badges + gas cloud/shutter + charts + AI + logs
 # ======================================================
 def render_room(
     images_dir: Path,
@@ -232,22 +233,14 @@ def render_room(
     dets = DETECTORS.get(room, [])
     colL, colR = st.columns([2, 1], gap="large")
 
-    # Detector pins (absolute, inline CSS so they show inside iframe)
+    # Detector pins (absolute, inline CSS; use bridge to set det)
     pins_html = []
     for d in dets:
         lbl = d["label"]
-        href = f"?room={quote(room)}&det={quote(lbl)}"
         pins_html.append(
             f"""
-            <a class="detector" href="{href}" target="_top"
-               onclick="
-                 try {{
-                   const base = window.top.location.pathname;
-                   window.top.location.href = base + '?room=' + encodeURIComponent('{room}') + '&det=' + encodeURIComponent('{lbl}');
-                 }} catch(e) {{
-                   window.location.search = '?room=' + encodeURIComponent('{room}') + '&det=' + encodeURIComponent('{lbl}');
-                 }}
-                 return false;"
+            <a class="detector" href="#"
+               onclick="window.parent.postMessage({{type:'setQS', room:'{room}', det:'{lbl}'}}, '*'); return false;"
                style="position:absolute; left:{d['x']}%; top:{d['y']}%; transform:translate(-50%,-50%);
                       border:2px solid #22c55e; border-radius:10px; background:#ffffff;
                       padding:6px 10px; min-width:72px; text-align:center; z-index:30;
@@ -269,15 +262,11 @@ def render_room(
             position:relative; width:100%; max-width:1200px; margin:6px 0;
             border:2px solid #0a2342; border-radius:12px; overflow:hidden;
             box-shadow:0 18px 60px rgba(0,0,0,.12); background:#fff;">
-          <style>
-            .detector:hover {{ background:#eaffea !important; }}
-          </style>
+          <style>.detector:hover {{ background:#eaffea !important; }}</style>
           <img id="roomimg" src="{_img64(room_path)}" alt="{room}" style="display:block; width:100%; height:auto;" />
           <canvas id="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
-          <div id="shutter" style="
-              position:absolute; right:0; top:0; width:26px; height:100%;
-              background:rgba(15,23,42,.55);
-              transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
+          <div id="shutter" style="position:absolute; right:0; top:0; width:26px; height:100%;
+              background:rgba(15,23,42,.55); transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
               border-left:2px solid rgba(148,163,184,.5);"></div>
           {pins}
         </div>
@@ -287,60 +276,37 @@ def render_room(
             const wrap = document.getElementById("roomwrap");
             const sh = document.getElementById("shutter");
             const ctx = canvas.getContext("2d");
-
             function resize() {{
-              const rect = wrap.getBoundingClientRect();
-              canvas.width = rect.width;
-              canvas.height = rect.height;
+              const rect = wrap.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
             }}
             resize(); window.addEventListener('resize', resize);
-
             function hexToRGBA(hex, a) {{
-              const c = hex.replace('#','');
-              const r = parseInt(c.substring(0,2),16);
-              const g = parseInt(c.substring(2,4),16);
-              const b = parseInt(c.substring(4,6),16);
-              return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+              const c = hex.replace('#',''); const r = parseInt(c.substring(0,2),16);
+              const g = parseInt(c.substring(2,4),16); const b = parseInt(c.substring(4,6),16);
+              return 'rgba('+r+','+g+','+b+','+a+')';
             }}
-
             let t0 = null, raf = null;
             function drawCloud(ts) {{
-              if (!t0) t0 = ts;
-              const t = (ts - t0)/1000;
+              if (!t0) t0 = ts; const t = (ts - t0)/1000;
               ctx.clearRect(0,0,canvas.width,canvas.height);
               for (let i=0;i<28;i++) {{
-                const ang = i * 0.25;
-                const rad = 20 + t*60 + i*8;
+                const ang = i * 0.25; const rad = 20 + t*60 + i*8;
                 const x = canvas.width*0.55 + Math.cos(ang)*rad;
                 const y = canvas.height*0.55 + Math.sin(ang)*rad*0.62;
                 const a = Math.max(0, 0.55 - i*0.02 - t*0.07);
-                ctx.beginPath();
-                ctx.fillStyle = hexToRGBA("{cloud_color}", a);
-                ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2);
-                ctx.fill();
+                ctx.beginPath(); ctx.fillStyle = hexToRGBA("{cloud_color}", a);
+                ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2); ctx.fill();
               }}
               raf = requestAnimationFrame(drawCloud);
             }}
-            function startCloud() {{
-              if (raf) cancelAnimationFrame(raf);
-              t0 = null;
-              raf = requestAnimationFrame(drawCloud);
-            }}
-            function clearCloud() {{
-              if (raf) cancelAnimationFrame(raf);
-              ctx.clearRect(0,0,canvas.width,canvas.height);
-            }}
-            function closeShutter() {{
-              sh.style.transform = 'translateX(0%)';
-              setTimeout(()=>{{ sh.style.transform = 'translateX(110%)'; }}, 6000);
-            }}
-
+            function startCloud() {{ if (raf) cancelAnimationFrame(raf); t0 = null; raf = requestAnimationFrame(drawCloud); }}
+            function clearCloud() {{ if (raf) cancelAnimationFrame(raf); ctx.clearRect(0,0,canvas.width,canvas.height); }}
+            function closeShutter() {{ sh.style.transform = 'translateX(0%)'; setTimeout(()=>{{ sh.style.transform = 'translateX(110%)'; }}, 6000); }}
             const autoCloud = {auto_cloud};
             if (autoCloud) startCloud();
             {"closeShutter();" if ops.get("close_shutter") else ""}
             {"clearCloud();" if ops.get("ventilate") else ""}
             {"clearCloud();" if ops.get("reset") else ""}
-
           }})();
         </script>
         """
@@ -418,13 +384,10 @@ def render_room(
                 st.markdown(f"**Status:** {status}")
                 st.caption(msg)
 
-                # AI auto‑log on status change
-                key = _sim_key(room, selected_detector)
-                last_status = st.session_state.setdefault("last_status", {}).get(key)
-                if last_status != status:
-                    st.session_state["last_status"][key] = status
-                    mean, sd = history.stats(room, selected_detector, window_hours=24)
-                    crossing = None
+                # Honeywell recommendation
+                rec = HONEYWELL_REC.get(selected_detector)
+                if rec:
+                    st.markdown(f"**Recommended hardware:** {rec}")
 
                 # AI auto‑log on status change
                 key = _sim_key(room, selected_detector)
@@ -432,11 +395,8 @@ def render_room(
                 if last_status != status:
                     st.session_state["last_status"][key] = status
                     mean, sd = history.stats(room, selected_detector, window_hours=24)
-
-                    # rough time-to-cross projection (minutes)
                     crossing = None
                     if thr:
-                        # estimate slope from recent 15 points (already computed above as `slope`)
                         if thr["mode"] == "high" and latest >= thr["warn"]:
                             crossing = 0 if latest >= thr["alarm"] else int(
                                 max(1, round((thr["alarm"] - latest) / max(slope, 1e-3)))
@@ -466,7 +426,7 @@ def render_room(
                     log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
                     log.append({"ts": int(time.time()), "text": answer})
 
-            # Manual tick helpers for demo feel
+            # Manual tick helpers for demo
             cc1, cc2, cc3 = st.columns(3)
             if selected_detector:
                 if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
@@ -529,7 +489,7 @@ def render_room(
                 )
                 st.chat_message("ai").write(answer)
 
-        # Log operator actions (ack, shutter, vent, reset)
+        # Log operator actions
         if ops:
             action_txts = []
             if ops.get("ack"):
@@ -548,7 +508,6 @@ def render_room(
 # Facility snapshot + export
 # ======================================================
 def build_facility_snapshot() -> dict:
-    """Compact snapshot used by the global AI assistant."""
     snapshot = {}
     for room, dets in DETECTORS.items():
         node = {}
@@ -566,9 +525,7 @@ def build_facility_snapshot() -> dict:
         snapshot[room] = node
     return snapshot
 
-
 def export_incident_html(logs: dict, brand: dict | None = None) -> str:
-    """Export AI event log as branded HTML."""
     navy = brand.get("navy", "#0a2342") if brand else "#0a2342"
     red = brand.get("red", "#d81f26") if brand else "#d81f26"
 
@@ -599,6 +556,7 @@ def export_incident_html(logs: dict, brand: dict | None = None) -> str:
             )
     html_parts.append("</body></html>")
     return "\n".join(html_parts)
+
 
 
 
