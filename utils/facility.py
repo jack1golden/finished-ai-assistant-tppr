@@ -38,7 +38,7 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
             return p
     return None
 
-# ---------- overview hotspots (positions are already dialed in) ----------
+# ---------- overview hotspots ----------
 HOTSPOTS = {
     "Room 1": dict(left=63, top=2,  width=14, height=16),
     "Room 2": dict(left=67, top=43, width=14, height=16),
@@ -48,22 +48,12 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (latest moves) ----------
+# ---------- detectors (final positions incl your last tweaks) ----------
 DETECTORS = {
-    "Room 1": [
-        dict(label="NH₃", x=35, y=35, units="ppm"),
-    ],
-    # CO: was 88,38 → down +8% → y=46
-    "Room 2": [
-    dict(label="CO", x=85, y=62, units="ppm"),
-    ],
-    "Room 3": [
-        dict(label="O₂", x=5, y=44, units="%"),
-    ],
-    # Ethanol: was 63,23 → up another +8% → y=15
-    "Room 12 17": [
-        dict(label="Ethanol", x=63, y=15, units="ppm"),
-    ],
+    "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
+    "Room 2": [dict(label="CO", x=85, y=62, units="ppm")],  # your final
+    "Room 3": [dict(label="O₂", x=5, y=44, units="%")],
+    "Room 12 17": [dict(label="Ethanol", x=63, y=15, units="ppm")],
     "Room Production": [
         dict(label="NH₃", x=20, y=28, units="ppm"),
         dict(label="O₂", x=88, y=40, units="%"),
@@ -74,13 +64,24 @@ DETECTORS = {
     ],
 }
 
-# ---------- simple thresholds for AI advice ----------
+def get_detectors_for(room: str):
+    return DETECTORS.get(room, [])
+
+# ---------- thresholds & color map ----------
 THRESHOLDS = {
     "O₂":      {"mode": "low",  "warn": 19.5, "alarm": 18.0, "units": "%"},
     "CO":      {"mode": "high", "warn": 35.0, "alarm": 50.0, "units": "ppm"},
     "H₂S":     {"mode": "high", "warn": 10.0, "alarm": 15.0, "units": "ppm"},
     "NH₃":     {"mode": "high", "warn": 25.0, "alarm": 35.0, "units": "ppm"},
     "Ethanol": {"mode": "high", "warn": 300.0, "alarm": 500.0, "units": "ppm"},
+}
+
+GAS_COLORS = {
+    "NH₃": "#8b5cf6",     # purple
+    "CO": "#ef4444",      # red
+    "O₂": "#60a5fa",      # blue
+    "H₂S": "#eab308",     # yellow
+    "Ethanol": "#fb923c", # orange
 }
 
 # ---------- live series sim ----------
@@ -215,8 +216,20 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         )
     pins = "\n".join(pins_html)
 
+    # Backup detector buttons (no JS) to guarantee click works
+    with colR:
+        if dets:
+            st.markdown("#### Detector (backup)")
+            for d in dets:
+                if st.button(f"Open {d['label']} chart", key=f"btn_{room}_{d['label']}"):
+                    st.session_state["selected_detector"] = d["label"]
+                    st.query_params.update({"room": room, "det": d["label"]})
+                    st.rerun()
+
     auto_start = "true" if simulate else "false"
-    cloud_color = "#38bdf8"  # cyan-ish
+    # pick cloud color by gas (if a detector is selected)
+    gas = selected_detector or (dets[0]["label"] if dets else "CO")
+    cloud_color = GAS_COLORS.get(gas, "#38bdf8")
 
     room_html = f"""
     <style>
@@ -329,7 +342,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             st.markdown(f"**Status:** {status}")
             st.write(msg)
         else:
-            st.info("Click a detector badge on the image to view its live trend.")
+            st.info("Click a detector badge on the image (or the backup buttons) to view its live trend.")
         st.divider()
         st.subheader("🤖 AI Safety Assistant")
         if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
@@ -352,6 +365,7 @@ def render_ai_chat():
             "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
             "verify detector calibrations and evacuate if O₂ < 19.5%."
         )
+
 
 
 
