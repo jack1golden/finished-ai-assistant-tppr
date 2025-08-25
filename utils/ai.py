@@ -3,16 +3,33 @@ from __future__ import annotations
 import os
 from typing import Dict, Any
 
+import streamlit as st  # <- to read st.secrets
+
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None  # library not installed yet / not available
 
-MODEL = os.getenv("SAFETY_AI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("SAFETY_AI_MODEL", "gpt-4o-mini")  # change if you prefer
+
+def _get_api_key() -> str | None:
+    # Prefer env, then secrets (works on Streamlit Cloud)
+    k = os.getenv("OPENAI_API_KEY")
+    if k:
+        return k
+    try:
+        return st.secrets.get("OPENAI_API_KEY")  # type: ignore[attr-defined]
+    except Exception:
+        return None
 
 def is_available() -> bool:
     """Returns True if an OpenAI key + library are available."""
-    return bool(os.getenv("OPENAI_API_KEY") and OpenAI is not None)
+    return bool(_get_api_key() and OpenAI is not None)
+
+def backend_name(force_rule: bool = False) -> str:
+    if force_rule:
+        return "Rule-based (forced)"
+    return "OpenAI" if is_available() else "Rule-based"
 
 def _rule_based(prompt: str, context: Dict[str, Any]) -> str:
     room = context.get("room", "Unknown room")
@@ -26,7 +43,7 @@ def _rule_based(prompt: str, context: Dict[str, Any]) -> str:
     advice.append(f"Room: **{room}** • Gas: **{gas}** • Status: **{status}**")
     if value is not None and thr:
         advice.append(f"Latest reading: **{value:.2f}{thr.get('units','')}**")
-        if thr["mode"] == "low":
+        if thr.get("mode") == "low":
             advice.append(f"Low‑warn: {thr['warn']}{thr['units']} • Low‑alarm: {thr['alarm']}{thr['units']}")
         else:
             advice.append(f"Warn: {thr['warn']}{thr['units']} • Alarm: {thr['alarm']}{thr['units']}")
@@ -56,12 +73,12 @@ def ask_ai(prompt: str, context: Dict[str, Any], force_rule: bool = False) -> st
     else rule-based.
     context keys: room, gas, value, status, thresholds, simulate, recent_series
     """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if force_rule or not api_key or OpenAI is None:
+    key = _get_api_key()
+    if force_rule or not key or OpenAI is None:
         return _rule_based(prompt, context)
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=key)
         sys_prompt = (
             "You are an industrial safety assistant for a pharmaceutical facility. "
             "Give concise, actionable guidance using standards-informed best practice. "
@@ -81,4 +98,6 @@ def ask_ai(prompt: str, context: Dict[str, Any], force_rule: bool = False) -> st
         )
         return resp.choices[0].message.content.strip()
     except Exception:
+        # Never break the demo
         return _rule_based(prompt, context)
+
