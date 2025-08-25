@@ -40,20 +40,23 @@ if "det" in qp and qp["det"]:
 with st.sidebar:
     st.markdown("### Navigation")
     rooms = ["Overview", "Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
-    sel = st.selectbox("Go to…", rooms, index=rooms.index(st.session_state["current_room"]) if st.session_state["current_room"] in rooms else 0)
+    idx = rooms.index(st.session_state["current_room"]) if st.session_state["current_room"] in rooms else 0
+    sel = st.selectbox("Go to…", rooms, index=idx)
     if sel == "Overview":
         st.session_state["current_room"] = None
         st.session_state["selected_detector"] = None
         st.query_params.clear()
     else:
         st.session_state["current_room"] = sel
-        st.query_params.update({"room": sel})
+        # preserve selected det if already chosen, else none (the room UI sets it on click)
+        st.query_params.update({"room": sel, **({"det": st.session_state["selected_detector"]} if st.session_state["selected_detector"] else {})})
 
     if st.session_state["current_room"] and st.session_state["current_room"] != "Overview":
         det_list = facility.get_detectors_for(st.session_state["current_room"])
         if det_list:
-            cur = st.session_state.get("selected_detector") or det_list[0]["label"]
-            chosen = st.radio("Detector", [d["label"] for d in det_list], index=[d["label"] for d in det_list].index(cur))
+            labels = [d["label"] for d in det_list]
+            current = st.session_state.get("selected_detector") or labels[0]
+            chosen = st.radio("Detector", labels, index=labels.index(current))
             if chosen != st.session_state.get("selected_detector"):
                 st.session_state["selected_detector"] = chosen
                 st.query_params.update({"room": st.session_state["current_room"], "det": chosen})
@@ -82,8 +85,7 @@ if not room:
     facility.render_overview(IMAGES)
     st.markdown("#### Quick open")
     bcols = st.columns(6)
-    labels = ["Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
-    for i, rn in enumerate(labels):
+    for i, rn in enumerate(["Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]):
         if bcols[i].button(rn, key=f"open_{rn}"):
             st.session_state["current_room"] = rn
             st.query_params.update({"room": rn})
@@ -91,8 +93,10 @@ if not room:
 else:
     st.subheader(f"🚪 {room}")
     simulate_flag = st.session_state["simulate_by_room"].get(room, False)
-    # gentle auto-refresh so charts move
-    st.autorefresh(interval=1500, key=f"auto_{room}")
+
+    # lightweight auto-refresh via JS so charts update without st.autorefresh
+    facility.inject_autorefresh_ms(1500)
+
     facility.render_room(
         images_dir=IMAGES,
         room=room,
@@ -106,4 +110,5 @@ else:
         st.session_state["selected_detector"] = None
         st.query_params.clear()
         st.rerun()
+
 
