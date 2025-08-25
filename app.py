@@ -16,7 +16,8 @@ UTILS_DIR = HERE / "utils"
 if str(UTILS_DIR) not in sys.path:
     sys.path.insert(0, str(UTILS_DIR))
 
-from utils import facility  # utils/facility.py
+from utils import facility          # utils/facility.py
+from utils import ai as safety_ai   # utils/ai.py
 
 st.set_page_config(page_title="Pharma Safety HMI — AI First", layout="wide")
 
@@ -27,9 +28,10 @@ def _d(k, v):
 
 _d("current_room", None)
 _d("selected_detector", None)
-_d("simulate_by_room", {})  # {room: bool}
+_d("simulate_by_room", {})   # {room: bool}
+_d("force_rule_ai", False)   # force rule-based even if key exists
 
-# ---------- parse query params -> session ----------
+# ---------- query params → session sync ----------
 qp = st.query_params
 if "room" in qp and qp["room"]:
     st.session_state["current_room"] = unquote(qp["room"])
@@ -47,17 +49,15 @@ def _sanitize_selected_detector():
     cur = st.session_state.get("selected_detector")
     if not labels:
         st.session_state["selected_detector"] = None
-        # also strip det from URL if present
         st.query_params.update({"room": room})
         return
     if cur not in labels:
-        # default to first detector in that room
         st.session_state["selected_detector"] = labels[0]
         st.query_params.update({"room": room, "det": labels[0]})
 
 _sanitize_selected_detector()
 
-# ---------- sidebar: robust navigation ----------
+# ---------- sidebar ----------
 with st.sidebar:
     st.markdown("### Navigation")
     rooms = ["Overview", "Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
@@ -68,12 +68,11 @@ with st.sidebar:
         st.session_state["selected_detector"] = None
         st.query_params.clear()
     else:
-        # if changing rooms, clear incompatible detector
         prev_room = st.session_state.get("current_room")
         st.session_state["current_room"] = sel
         if prev_room != sel:
             st.session_state["selected_detector"] = None
-        _sanitize_selected_detector()  # ensure we have a valid detector for this room
+        _sanitize_selected_detector()
 
     # detector chooser (safe)
     room = st.session_state.get("current_room")
@@ -105,6 +104,16 @@ with st.sidebar:
         if c2.button("⏹ Reset", use_container_width=True, key=f"reset_{room}"):
             st.session_state["simulate_by_room"][room] = False
 
+    st.write("---")
+    st.markdown("### AI Mode")
+    available = safety_ai.is_available()
+    st.caption(f"Backend detected: **{'OpenAI (available)' if available else 'Rule-based only'}**")
+    st.session_state["force_rule_ai"] = st.toggle(
+        "Force rule‑based (no API calls)",
+        value=st.session_state["force_rule_ai"],
+        help="Leave off to use OpenAI when available."
+    )
+
 # ---------- header ----------
 cols = st.columns([5, 1])
 with cols[0]:
@@ -127,7 +136,9 @@ if not room:
             st.session_state["current_room"] = rn
             st.session_state["selected_detector"] = None
             _sanitize_selected_detector()
-            st.query_params.update({"room": rn, **({"det": st.session_state["selected_detector"]} if st.session_state["selected_detector"] else {})})
+            st.query_params.update(
+                {"room": rn, **({"det": st.session_state["selected_detector"]} if st.session_state["selected_detector"] else {})}
+            )
             st.rerun()
 else:
     st.subheader(f"🚪 {room}")
@@ -138,6 +149,7 @@ else:
         room=room,
         simulate=simulate_flag,
         selected_detector=st.session_state.get("selected_detector"),
+        ai_force_rule=st.session_state["force_rule_ai"],
     )
 
     st.write("---")
@@ -146,5 +158,6 @@ else:
         st.session_state["selected_detector"] = None
         st.query_params.clear()
         st.rerun()
+
 
 
