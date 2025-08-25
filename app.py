@@ -36,26 +36,50 @@ if "room" in qp and qp["room"]:
 if "det" in qp and qp["det"]:
     st.session_state["selected_detector"] = unquote(qp["det"])
 
-# ---------- header: tabs + logo ----------
+# ---------- sidebar: robust navigation fallback ----------
+with st.sidebar:
+    st.markdown("### Navigation")
+    rooms = ["Overview", "Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
+    sel = st.selectbox("Go to…", rooms, index=rooms.index(st.session_state["current_room"]) if st.session_state["current_room"] in rooms else 0)
+    if sel == "Overview":
+        st.session_state["current_room"] = None
+        st.session_state["selected_detector"] = None
+        st.query_params.clear()
+    else:
+        st.session_state["current_room"] = sel
+        st.query_params.update({"room": sel})
+
+    if st.session_state["current_room"] and st.session_state["current_room"] != "Overview":
+        det_list = facility.get_detectors_for(st.session_state["current_room"])
+        if det_list:
+            cur = st.session_state.get("selected_detector") or det_list[0]["label"]
+            chosen = st.radio("Detector", [d["label"] for d in det_list], index=[d["label"] for d in det_list].index(cur))
+            if chosen != st.session_state.get("selected_detector"):
+                st.session_state["selected_detector"] = chosen
+                st.query_params.update({"room": st.session_state["current_room"], "det": chosen})
+
+        st.write("---")
+        c1, c2 = st.columns(2)
+        if c1.button("💨 Simulate", use_container_width=True):
+            st.session_state["simulate_by_room"][st.session_state["current_room"]] = True
+        if c2.button("⏹ Reset", use_container_width=True):
+            st.session_state["simulate_by_room"][st.session_state["current_room"]] = False
+
+# ---------- header ----------
 cols = st.columns([5, 1])
 with cols[0]:
-    tab_overview, tab_r1, tab_r2, tab_r3, tab_p1, tab_p2, tab_r1217, tab_settings, tab_ai = st.tabs([
-        "Overview",
-        "Room 1", "Room 2", "Room 3",
-        "Room Production", "Room Production 2", "Room 12 17",
-        "Settings", "AI",
-    ])
+    st.title("Pharma Safety HMI — AI First")
 with cols[1]:
     logo = IMAGES / "logo.png"
     if logo.exists():
         st.image(str(logo), caption="", use_container_width=True)
 
-# ---------- Overview ----------
-with tab_overview:
-    st.title("🏭 Facility Overview (2.5D)")
-    facility.render_overview(IMAGES)
+# ---------- main area ----------
+room = st.session_state["current_room"]
 
-    # Native backup buttons under the image
+if not room:
+    st.subheader("🏭 Facility Overview (2.5D)")
+    facility.render_overview(IMAGES)
     st.markdown("#### Quick open")
     bcols = st.columns(6)
     labels = ["Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
@@ -64,47 +88,22 @@ with tab_overview:
             st.session_state["current_room"] = rn
             st.query_params.update({"room": rn})
             st.rerun()
+else:
+    st.subheader(f"🚪 {room}")
+    simulate_flag = st.session_state["simulate_by_room"].get(room, False)
+    # gentle auto-refresh so charts move
+    st.autorefresh(interval=1500, key=f"auto_{room}")
+    facility.render_room(
+        images_dir=IMAGES,
+        room=room,
+        simulate=simulate_flag,
+        selected_detector=st.session_state.get("selected_detector"),
+    )
 
-# Helper to render each room tab
-def _room_tab(container, room_name: str, sim_key: str):
-    with container:
-        st.title(f"🚪 {room_name}")
-        c1, c2, c3 = st.columns([1, 1, 2])
-        if c1.button("💨 Simulate Gas Leak", key=f"sim_{sim_key}"):
-            st.session_state["simulate_by_room"][room_name] = True
-            st.query_params.update({"room": room_name})
-            st.rerun()
-        if c2.button("⏹ Reset", key=f"reset_{sim_key}"):
-            st.session_state["simulate_by_room"][room_name] = False
-            st.query_params.update({"room": room_name})
-            st.rerun()
-        if c3.button("⬅️ Back to Overview", key=f"back_{sim_key}"):
-            st.session_state["current_room"] = None
-            st.session_state["selected_detector"] = None
-            st.query_params.clear()
-            st.rerun()
+    st.write("---")
+    if st.button("⬅️ Back to Overview"):
+        st.session_state["current_room"] = None
+        st.session_state["selected_detector"] = None
+        st.query_params.clear()
+        st.rerun()
 
-        facility.render_room(
-            images_dir=IMAGES,
-            room=room_name,
-            simulate=st.session_state["simulate_by_room"].get(room_name, False),
-            selected_detector=st.session_state["selected_detector"],
-        )
-
-# ---------- Rooms (tabs now render unconditionally—no extra clicking needed) ----------
-_room_tab(tab_r1, "Room 1", "room1")
-_room_tab(tab_r2, "Room 2", "room2")
-_room_tab(tab_r3, "Room 3", "room3")
-_room_tab(tab_p1, "Room Production", "prod1")
-_room_tab(tab_p2, "Room Production 2", "prod2")
-_room_tab(tab_r1217, "Room 12 17", "r1217")
-
-# ---------- Settings ----------
-with tab_settings:
-    st.title("⚙️ Settings")
-    facility.render_settings()
-
-# ---------- AI ----------
-with tab_ai:
-    st.title("🤖 AI Safety Assistant")
-    facility.render_ai_chat()
