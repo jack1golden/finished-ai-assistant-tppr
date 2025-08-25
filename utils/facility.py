@@ -38,46 +38,54 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
             return p
     return None
 
-# ---------- overview hotspots (latest positions + slight size tweaks) ----------
+# ---------- overview hotspots (positions are already dialed in) ----------
 HOTSPOTS = {
     "Room 1": dict(left=63, top=2,  width=14, height=16),
     "Room 2": dict(left=67, top=43, width=14, height=16),
     "Room 3": dict(left=60, top=19, width=14, height=16),
-    "Room 12 17": dict(left=38, top=-13, width=13, height=15),  # up +8%
+    "Room 12 17": dict(left=38, top=-13, width=13, height=15),
     "Room Production": dict(left=24, top=28, width=23, height=21),
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (latest moves applied) ----------
-# “left +X%” => x - X ; “right +X%” => x + X ; “up +X%” => y - X ; “down +X%” => y + X
+# ---------- detectors (latest moves) ----------
+# Convention: left +X => x - X ; right +X => x + X ; up +X => y - X ; down +X => y + X
 DETECTORS = {
+    # perfect as-is
     "Room 1": [
         dict(label="NH₃", x=35, y=35, units="ppm"),
     ],
+    # move CO down +5
     "Room 2": [
-        # was 93,33 → left +5% (=88), down +5% (=38)
-        dict(label="CO", x=88, y=38, units="ppm"),
+        dict(label="CO", x=88, y=43, units="ppm"),   # was 88,38 -> y+5
     ],
+    # perfect previously after prior tweak
     "Room 3": [
-        # earlier base was (3,47); now up +3 (44), right +2 (5)
         dict(label="O₂", x=5, y=44, units="%"),
     ],
+    # ethanol up +8
     "Room 12 17": [
-        # previously at (63,31) after up+5%; no new change beyond that request
-        dict(label="Ethanol", x=63, y=31, units="ppm"),
+        dict(label="Ethanol", x=63, y=23, units="ppm"),  # was 63,31 -> y-8
     ],
+    # perfect as-is
     "Room Production": [
-        # NH3: was (22,28) then left +2% => 20
         dict(label="NH₃", x=20, y=28, units="ppm"),
-        # O2: was (88,42) then up +2% => y=40
         dict(label="O₂", x=88, y=40, units="%"),
     ],
+    # H2S up +2 & left +3; O2 right +5
     "Room Production 2": [
-        # O2: was (75,45) then right +3% => 78
-        dict(label="O₂", x=78, y=45, units="%"),
-        # H2S: was (20,35) then left +2% => 18, up +4% => 31
-        dict(label="H₂S", x=18, y=31, units="ppm"),
+        dict(label="O₂", x=83, y=45, units="%"),        # was 78,45 -> x+5
+        dict(label="H₂S", x=15, y=29, units="ppm"),     # was 18,31 -> x-3, y-2
     ],
+}
+
+# ---------- simple thresholds for AI advice ----------
+THRESHOLDS = {
+    "O₂":      {"mode": "low",  "warn": 19.5, "alarm": 18.0, "units": "%"},
+    "CO":      {"mode": "high", "warn": 35.0, "alarm": 50.0, "units": "ppm"},
+    "H₂S":     {"mode": "high", "warn": 10.0, "alarm": 15.0, "units": "ppm"},
+    "NH₃":     {"mode": "high", "warn": 25.0, "alarm": 35.0, "units": "ppm"},
+    "Ethanol": {"mode": "high", "warn": 300.0, "alarm": 500.0, "units": "ppm"},
 }
 
 # ---------- live series sim ----------
@@ -88,7 +96,8 @@ def _next_value(room: str, label: str) -> float:
     key = _sim_key(room, label)
     state = st.session_state.setdefault("det_sim", {})
     v = state.get(key, 10.0)
-    v += float(np.random.uniform(-0.5, 0.9))
+    # gentle random walk
+    v += float(np.random.uniform(-0.4, 0.9))
     v = max(0.0, v)
     state[key] = v
     return v
@@ -101,6 +110,24 @@ def _series(room: str, label: str, n: int = 90):
         buf[:] = buf[-n:]
     return buf
 
+def _status_for(label: str, value: float) -> tuple[str, str]:
+    thr = THRESHOLDS.get(label)
+    if not thr:
+        return "OK", "Monitoring normal conditions."
+    mode = thr["mode"]
+    if mode == "low":
+        if value <= thr["alarm"]:
+            return "ALARM", f"{label} critically low ({value:.2f}{thr['units']}). Evacuate, ventilate, and isolate."
+        if value <= thr["warn"]:
+            return "WARN", f"{label} trending low ({value:.2f}{thr['units']}). Investigate consumption/airflow."
+        return "OK", f"{label} normal ({value:.2f}{thr['units']})."
+    else:  # high
+        if value >= thr["alarm"]:
+            return "ALARM", f"{label} high ({value:.2f}{thr['units']}). Close shutters, isolate, evacuate."
+        if value >= thr["warn"]:
+            return "WARN", f"{label} elevated ({value:.2f}{thr['units']}). Increase extraction, check for leaks."
+        return "OK", f"{label} normal ({value:.2f}{thr['units']})."
+
 # ======================================================
 # Overview
 # ======================================================
@@ -112,7 +139,6 @@ def render_overview(images_dir: Path):
 
     hotspots_html = []
     for room, box in HOTSPOTS.items():
-        # fallback href; onclick forces parent navigation (works in Streamlit Cloud iframe)
         href = f"?room={quote(room)}"
         hotspots_html.append(
             f"""
@@ -184,7 +210,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
                    const base = window.top.location.pathname;
                    window.top.location.href = base + '?room=' + encodeURIComponent('{room}') + '&det=' + encodeURIComponent('{lbl}');
                  }} catch(e) {{
-                   window.location.search = 'room={room}&det={lbl}';
+                   window.location.search = '?room=' + encodeURIComponent('{room}') + '&det=' + encodeURIComponent('{lbl}');
                  }}
                  return false;"
                style="left:{d['x']}%;top:{d['y']}%;">
@@ -212,8 +238,8 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         padding:6px 10px; min-width:72px; text-align:center; z-index:20;
         box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
       }}
-        .detector:hover {{ background:#eaffea; }}
-        .detector .lbl {{ font-size:14px; line-height:1.1; }}
+      .detector:hover {{ background:#eaffea; }}
+      .detector .lbl {{ font-size:14px; line-height:1.1; }}
 
       canvas.cloud {{
         position:absolute; left:0; top:0; width:100%; height:100%;
@@ -266,9 +292,9 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
 
           for (let i=0;i<28;i++) {{
             const ang = i * 0.25;
-            const r = 20 + t*60 + i*8;
-            const x = canvas.width*0.55 + Math.cos(ang)*r;
-            const y = canvas.height*0.55 + Math.sin(ang)*r*0.62;
+            const rad = 20 + t*60 + i*8;
+            const x = canvas.width*0.55 + Math.cos(ang)*rad;
+            const y = canvas.height*0.55 + Math.sin(ang)*rad*0.62;
             const a = Math.max(0, 0.55 - i*0.02 - t*0.07);
             ctx.beginPath();
             ctx.fillStyle = hexToRGBA("{cloud_color}", a);
@@ -303,6 +329,10 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             st.subheader(f"📈 {selected_detector} — Live trend")
             series = _series(room, selected_detector, n=90)
             st.line_chart({"reading": series})
+            latest = series[-1] if series else 0.0
+            status, msg = _status_for(selected_detector, latest)
+            st.markdown(f"**Status:** {status}")
+            st.write(msg)
         else:
             st.info("Click a detector badge on the image to view its live trend.")
         st.divider()
@@ -327,6 +357,7 @@ def render_ai_chat():
             "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
             "verify detector calibrations and evacuate if O₂ < 19.5%."
         )
+
 
 
 
