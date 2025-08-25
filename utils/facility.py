@@ -8,6 +8,7 @@ from urllib.parse import quote
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
+from . import ai  # AI brain (rule-based fallback if no key)
 
 # ---------- helpers ----------
 def _b64_of(path: Path) -> str:
@@ -41,7 +42,7 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
             return p
     return None
 
-# ---------- overview hotspots ----------
+# ---------- overview hotspots (positioned) ----------
 HOTSPOTS = {
     "Room 1": dict(left=63, top=2,  width=14, height=16),
     "Room 2": dict(left=67, top=43, width=14, height=16),
@@ -51,18 +52,18 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (final) ----------
+# ---------- detectors (final placements) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
-    "Room 2": [dict(label="CO", x=85, y=62, units="ppm")],
-    "Room 3": [dict(label="O₂", x=5,  y=44, units="%")],
+    "Room 2": [dict(label="CO",  x=85, y=62, units="ppm")],
+    "Room 3": [dict(label="O₂",  x=5,  y=44, units="%")],
     "Room 12 17": [dict(label="Ethanol", x=63, y=15, units="ppm")],
     "Room Production": [
         dict(label="NH₃", x=20, y=28, units="ppm"),
-        dict(label="O₂", x=88, y=40, units="%"),
+        dict(label="O₂",  x=88, y=40, units="%"),
     ],
     "Room Production 2": [
-        dict(label="O₂", x=83, y=45, units="%"),
+        dict(label="O₂",  x=83, y=45, units="%"),
         dict(label="H₂S", x=15, y=29, units="ppm"),
     ],
 }
@@ -71,10 +72,11 @@ DETECTORS = {
 THRESHOLDS = {
     "O₂":      {"mode": "low",  "warn": 19.5, "alarm": 18.0, "units": "%"},
     "CO":      {"mode": "high", "warn": 35.0, "alarm": 50.0, "units": "ppm"},
-    "H₂S":     {"mode": "high", "warn": 10.0, "alarm": 15.0, "units": "ppm"},
-    "NH₃":     {"mode": "high", "warn": 25.0, "alarm": 35.0, "units": "ppm"},
+    "H₂S":     {"mode": "high", "warn": 10.0,  "alarm": 15.0, "units": "ppm"},
+    "NH₃":     {"mode": "high", "warn": 25.0,  "alarm": 35.0, "units": "ppm"},
     "Ethanol": {"mode": "high", "warn": 300.0, "alarm": 500.0, "units": "ppm"},
 }
+
 GAS_COLORS = {
     "NH₃": "#8b5cf6",     # purple
     "CO": "#ef4444",      # red
@@ -109,7 +111,6 @@ def _series(room: str, label: str, n: int = 90):
     key = _sim_key(room, label)
     buf = st.session_state.setdefault("det_buf", {}).setdefault(key, [])
     if not buf:
-        # seed a short history
         for _ in range(n):
             buf.append(_next_value(room, label))
     if len(buf) > n:
@@ -193,7 +194,13 @@ def render_overview(images_dir: Path):
 # ======================================================
 # Room
 # ======================================================
-def render_room(images_dir: Path, room: str, simulate: bool = False, selected_detector: str | None = None):
+def render_room(
+    images_dir: Path,
+    room: str,
+    simulate: bool = False,
+    selected_detector: str | None = None,
+    ai_force_rule: bool = False,
+):
     room_path = _find_first(images_dir, ROOM_FILES.get(room, []))
     if not room_path:
         st.error(f"No image found for {room} in /images.")
@@ -330,20 +337,18 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         """
         components.html(room_html, height=720, scrolling=False)
 
-    # RIGHT: chart + AI (no auto-refresh; use small controls)
+    # RIGHT: chart + AI (manual controls; no page auto-refresh)
     with colR:
         if selected_detector:
             st.subheader(f"📈 {selected_detector} — Live trend")
-            # controls to advance the line without reloading the whole page
             cc1, cc2, cc3 = st.columns(3)
-            if cc1.button("Add 5s of data", key=f"add5_{room}_{selected_detector}"):
+            if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
                 _add_points(room, selected_detector, 5)
                 st.rerun()
             if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
                 _add_points(room, selected_detector, 15)
                 st.rerun()
             if cc3.button("Spike", key=f"spike_{room}_{selected_detector}"):
-                # push a short spike
                 for _ in range(5):
                     _add_points(room, selected_detector, 1)
                     st.session_state["det_sim"][_sim_key(room, selected_detector)] = \
@@ -355,7 +360,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             latest = series[-1] if series else 0.0
             status, msg = _status_for(selected_detector, latest)
             st.markdown(f"**Status:** {status}")
-            st.write(msg)
+            st.caption(msg)
         else:
             st.info("Click a detector badge on the image (or the backup buttons) to view its live trend.")
 
@@ -363,10 +368,34 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         st.subheader("🤖 AI Safety Assistant")
         if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
             st.chat_message("user").write(p)
-            st.chat_message("ai").write(
-                "Recommendation: close shutters; increase extraction; verify detector calibrations; "
-                "evacuate if O₂ < 19.5%."
+
+            latest = None
+            series = []
+            if selected_detector:
+                series = _series(room, selected_detector, n=90)
+                latest = series[-1] if series else None
+            gas_label = selected_detector or (dets[0]["label"] if dets else None)
+            thr = THRESHOLDS.get(gas_label, {})
+
+            status = "OK"
+            if latest is not None and thr:
+                status, _ = _status_for(gas_label, latest)
+
+            answer = ai.ask_ai(
+                p,
+                context={
+                    "room": room,
+                    "gas": gas_label,
+                    "value": latest,
+                    "status": status,
+                    "thresholds": thr,
+                    "simulate": simulate,
+                    "recent_series": series[-60:],
+                },
+                force_rule=ai_force_rule,
             )
+            st.chat_message("ai").write(answer)
+
 
 
 
