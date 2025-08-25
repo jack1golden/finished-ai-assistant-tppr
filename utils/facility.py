@@ -537,7 +537,7 @@ def build_facility_snapshot() -> dict:
             if val is None:
                 continue
             status, _ = _status_for(label, val)
-                       node[label] = {
+            node[label] = {
                 "value": float(val),
                 "status": status,
                 "thresholds": THRESHOLDS.get(label, {})
@@ -573,7 +573,9 @@ def export_incident_html(logs: dict, brand: dict | None = None) -> str:
         html_parts.append(f"<h2 style='color:{red}'>{room}</h2>")
         for e in entries:
             tstr = ts_str(e["ts"])
-            html_parts.append(f"<div class='entry'><span class='ts'>{tstr}</span><br/>{e['text']}</div>")
+            html_parts.append(
+                f"<div class='entry'><span class='ts'>{tstr}</span><br/>{e['text']}</div>"
+            )
     html_parts.append("</body></html>")
     return "\n".join(html_parts)
 
