@@ -60,7 +60,7 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (your final placements) ----------
+# ---------- detectors (final placements) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO",  x=85, y=62, units="ppm")],
@@ -137,7 +137,7 @@ def _status_for(label: str, value: float) -> tuple[str, str]:
 history.init_if_needed(DETECTORS, days=7)
 
 # ======================================================
-# Overview with traffic‑light strip + hotspots
+# Overview with traffic‑light strip + hotspots (iframe-safe)
 # ======================================================
 def _room_worst_status(room: str) -> str:
     dets = DETECTORS.get(room, [])
@@ -182,8 +182,11 @@ def render_overview(images_dir: Path):
                    window.location.search = 'room=' + encodeURIComponent('{room}');
                  }}
                  return false;"
-               style="left:{box['left']}%;top:{box['top']}%;width:{box['width']}%;height:{box['height']}%;">
-              <span>{room}</span>
+               style="position:absolute; left:{box['left']}%; top:{box['top']}%; width:{box['width']}%; height:{box['height']}%;
+                      border:2px solid rgba(34,197,94,.95); border-radius:10px;
+                      background:rgba(16,185,129,.22); color:#0b1220; font-weight:800; font-size:12px;
+                      display:flex; align-items:flex-start; justify-content:flex-start; padding:4px 6px; z-index:20; text-decoration:none;">
+              <span style="background:rgba(2,6,23,.06); border:1px solid rgba(10,35,66,.25); padding:2px 6px; border-radius:8px;">{room}</span>
             </a>
             """
         )
@@ -195,6 +198,11 @@ def render_overview(images_dir: Path):
       position:relative; width:min(1280px,96%); margin:8px auto;
       border:2px solid #0a2342; border-radius:12px; overflow:hidden;
       box-shadow:0 18px 60px rgba(0,0,0,.20); background:#fff;">
+      <style>
+        .hotspot:hover {{ background:rgba(16,185,129,.32) !important; }}
+        .chip {{ display:inline-block; color:#0b1220; font-weight:800; padding:6px 10px;
+                 border-radius:999px; box-shadow:0 1px 6px rgba(0,0,0,.2); }}
+      </style>
       <img src="{_img64(ov_path)}" alt="overview" style="display:block; width:100%; height:auto;" />
       {tags}
       <div style="position:absolute; right:10px; bottom:8px; color:#d81f26; font-weight:700; background:#fff9; padding:2px 6px; border-radius:6px; border:1px solid #0a2342;">
@@ -224,7 +232,7 @@ def render_room(
     dets = DETECTORS.get(room, [])
     colL, colR = st.columns([2, 1], gap="large")
 
-    # Build detector pins (✅ restored)
+    # Detector pins (absolute, inline CSS so they show inside iframe)
     pins_html = []
     for d in dets:
         lbl = d["label"]
@@ -240,8 +248,11 @@ def render_room(
                    window.location.search = '?room=' + encodeURIComponent('{room}') + '&det=' + encodeURIComponent('{lbl}');
                  }}
                  return false;"
-               style="left:{d['x']}%;top:{d['y']}%;">
-              <div class="lbl">{lbl}</div>
+               style="position:absolute; left:{d['x']}%; top:{d['y']}%; transform:translate(-50%,-50%);
+                      border:2px solid #22c55e; border-radius:10px; background:#ffffff;
+                      padding:6px 10px; min-width:72px; text-align:center; z-index:30;
+                      box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;">
+              <div class="lbl" style="font-size:14px; line-height:1.1;">{lbl}</div>
             </a>
             """
         )
@@ -249,20 +260,20 @@ def render_room(
 
     # Operator one-shot triggers
     ops = ops or {}
-    trigger_shutter = "true" if ops.get("close_shutter") else "false"
-    trigger_vent = "true" if ops.get("ventilate") else "false"
-    trigger_reset = "true" if ops.get("reset") else "false"
     auto_cloud = "true" if simulate else "false"
+    cloud_color = GAS_COLORS.get(selected_detector or (dets[0]["label"] if dets else "CO"), "#38bdf8")
 
     with colL:
-        cloud_color = GAS_COLORS.get(selected_detector or (dets[0]["label"] if dets else "CO"), "#38bdf8")
         room_html = f"""
         <div id="roomwrap" style="
             position:relative; width:100%; max-width:1200px; margin:6px 0;
             border:2px solid #0a2342; border-radius:12px; overflow:hidden;
             box-shadow:0 18px 60px rgba(0,0,0,.12); background:#fff;">
+          <style>
+            .detector:hover {{ background:#eaffea !important; }}
+          </style>
           <img id="roomimg" src="{_img64(room_path)}" alt="{room}" style="display:block; width:100%; height:auto;" />
-          <canvas id="cloud" class="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
+          <canvas id="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
           <div id="shutter" style="
               position:absolute; right:0; top:0; width:26px; height:100%;
               background:rgba(15,23,42,.55);
@@ -272,10 +283,6 @@ def render_room(
         </div>
         <script>
           (function(){{
-            const autoCloud = {auto_cloud};
-            const triggerShutter = {str(ops.get("close_shutter", False)).lower()};
-            const triggerVent = {str(ops.get("ventilate", False)).lower()};
-            const triggerReset = {str(ops.get("reset", False)).lower()};
             const canvas = document.getElementById("cloud");
             const wrap = document.getElementById("roomwrap");
             const sh = document.getElementById("shutter");
@@ -288,7 +295,6 @@ def render_room(
             }}
             resize(); window.addEventListener('resize', resize);
 
-            let t0 = null, raf = null;
             function hexToRGBA(hex, a) {{
               const c = hex.replace('#','');
               const r = parseInt(c.substring(0,2),16);
@@ -297,6 +303,7 @@ def render_room(
               return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
             }}
 
+            let t0 = null, raf = null;
             function drawCloud(ts) {{
               if (!t0) t0 = ts;
               const t = (ts - t0)/1000;
@@ -327,10 +334,13 @@ def render_room(
               sh.style.transform = 'translateX(0%)';
               setTimeout(()=>{{ sh.style.transform = 'translateX(110%)'; }}, 6000);
             }}
+
+            const autoCloud = {auto_cloud};
             if (autoCloud) startCloud();
-            if (triggerShutter) closeShutter();
-            if (triggerVent) clearCloud();
-            if (triggerReset) {{ clearCloud(); }}
+            {"closeShutter();" if ops.get("close_shutter") else ""}
+            {"clearCloud();" if ops.get("ventilate") else ""}
+            {"clearCloud();" if ops.get("reset") else ""}
+
           }})();
         </script>
         """
@@ -415,11 +425,27 @@ def render_room(
                     st.session_state["last_status"][key] = status
                     mean, sd = history.stats(room, selected_detector, window_hours=24)
                     crossing = None
+
+                # AI auto‑log on status change
+                key = _sim_key(room, selected_detector)
+                last_status = st.session_state.setdefault("last_status", {}).get(key)
+                if last_status != status:
+                    st.session_state["last_status"][key] = status
+                    mean, sd = history.stats(room, selected_detector, window_hours=24)
+
+                    # rough time-to-cross projection (minutes)
+                    crossing = None
                     if thr:
+                        # estimate slope from recent 15 points (already computed above as `slope`)
                         if thr["mode"] == "high" and latest >= thr["warn"]:
-                            crossing = 0 if latest >= thr["alarm"] else int(max(1, round((thr["alarm"]-latest)/max(slope,1e-3))))
+                            crossing = 0 if latest >= thr["alarm"] else int(
+                                max(1, round((thr["alarm"] - latest) / max(slope, 1e-3)))
+                            )
                         elif thr["mode"] == "low" and latest <= thr["warn"]:
-                            crossing = 0 if latest <= thr["alarm"] else int(max(1, round((latest-thr["alarm"])/max(-slope,1e-3))))
+                            crossing = 0 if latest <= thr["alarm"] else int(
+                                max(1, round((latest - thr["alarm"]) / max(-slope, 1e-3)))
+                            )
+
                     prompt = f"Status changed to {status}. Provide actionable steps (max 4 bullets)."
                     answer = ai.ask_ai(
                         prompt,
@@ -440,7 +466,7 @@ def render_room(
                     log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
                     log.append({"ts": int(time.time()), "text": answer})
 
-            # Manual data helpers (demo feel)
+            # Manual tick helpers for demo feel
             cc1, cc2, cc3 = st.columns(3)
             if selected_detector:
                 if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
