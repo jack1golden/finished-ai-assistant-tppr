@@ -20,13 +20,8 @@ def _img64(path: Path) -> str:
 def _exists(p: Path) -> bool:
     return p.exists() and p.is_file()
 
-# Allow app to ask for detectors
 def get_detectors_for(room: str):
     return DETECTORS.get(room, [])
-
-# Tiny JS auto-refresh injector (works on Streamlit Cloud)
-def inject_autorefresh_ms(ms: int = 1500):
-    components.html(f"<script>setTimeout(()=>window.parent.location.reload(), {int(ms)});</script>", height=0)
 
 # ---------- file candidates ----------
 OVERVIEW_CANDS = ["Overview.png", "Overview (1).png", "overview.png"]
@@ -56,7 +51,7 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (final positions incl your last tweak: Room 2 CO x=85,y=62) ----------
+# ---------- detectors (final) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO", x=85, y=62, units="ppm")],
@@ -72,7 +67,7 @@ DETECTORS = {
     ],
 }
 
-# ---------- thresholds & color map ----------
+# ---------- thresholds & gas colors ----------
 THRESHOLDS = {
     "O₂":      {"mode": "low",  "warn": 19.5, "alarm": 18.0, "units": "%"},
     "CO":      {"mode": "high", "warn": 35.0, "alarm": 50.0, "units": "ppm"},
@@ -80,7 +75,6 @@ THRESHOLDS = {
     "NH₃":     {"mode": "high", "warn": 25.0, "alarm": 35.0, "units": "ppm"},
     "Ethanol": {"mode": "high", "warn": 300.0, "alarm": 500.0, "units": "ppm"},
 }
-
 GAS_COLORS = {
     "NH₃": "#8b5cf6",     # purple
     "CO": "#ef4444",      # red
@@ -97,16 +91,27 @@ def _next_value(room: str, label: str) -> float:
     key = _sim_key(room, label)
     state = st.session_state.setdefault("det_sim", {})
     v = state.get(key, 10.0)
-    # gentle random walk
-    v += float(np.random.uniform(-0.4, 0.9))
+    v += float(np.random.uniform(-0.4, 0.9))  # gentle random walk
     v = max(0.0, v)
     state[key] = v
     return v
 
+def _add_points(room: str, label: str, k: int = 5):
+    key = _sim_key(room, label)
+    buf = st.session_state.setdefault("det_buf", {}).setdefault(key, [])
+    for _ in range(k):
+        buf.append(_next_value(room, label))
+    if len(buf) > 180:
+        buf[:] = buf[-180:]
+    return buf
+
 def _series(room: str, label: str, n: int = 90):
     key = _sim_key(room, label)
     buf = st.session_state.setdefault("det_buf", {}).setdefault(key, [])
-    buf.append(_next_value(room, label))
+    if not buf:
+        # seed a short history
+        for _ in range(n):
+            buf.append(_next_value(room, label))
     if len(buf) > n:
         buf[:] = buf[-n:]
     return buf
@@ -221,125 +226,130 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         )
     pins = "\n".join(pins_html)
 
-    # Backup detector buttons (no JS) to guarantee click works
-    with colR:
-        if dets:
-            st.markdown("#### Detector (backup)")
-            for d in dets:
-                if st.button(f"Open {d['label']} chart", key=f"btn_{room}_{d['label']}"):
-                    st.session_state["selected_detector"] = d["label"]
-                    st.query_params.update({"room": room, "det": d["label"]})
-                    st.rerun()
-
-    auto_start = "true" if simulate else "false"
-    # pick cloud color by gas (if a detector is selected)
-    gas = selected_detector or (dets[0]["label"] if dets else "CO")
-    cloud_color = GAS_COLORS.get(gas, "#38bdf8")
-
-    room_html = f"""
-    <style>
-      .roomwrap {{
-        position:relative; width:100%; max-width:1200px; margin:6px 0;
-        border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
-        box-shadow:0 18px 60px rgba(0,0,0,.30);
-      }}
-      .roomwrap img {{ display:block; width:100%; height:auto; }}
-
-      .detector {{
-        position:absolute; transform:translate(-50%,-50%);
-        border:2px solid #22c55e; border-radius:10px; background:#fff;
-        padding:6px 10px; min-width:72px; text-align:center; z-index:20;
-        box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
-      }}
-      .detector:hover {{ background:#eaffea; }}
-      .detector .lbl {{ font-size:14px; line-height:1.1; }}
-
-      canvas.cloud {{
-        position:absolute; left:0; top:0; width:100%; height:100%;
-        pointer-events:none; z-index:15;
-      }}
-      .shutter {{
-        position:absolute; right:0; top:0; width:24px; height:100%;
-        background:rgba(15,23,42,.55);
-        transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
-        border-left:2px solid rgba(148,163,184,.5);
-      }}
-      .shutter.active {{ transform:translateX(0%); }}
-    </style>
-
-    <div id="roomwrap" class="roomwrap">
-      <img id="roomimg" src="{_img64(room_path)}" alt="{room}"/>
-      <canvas id="cloud" class="cloud"></canvas>
-      <div id="shutter" class="shutter"></div>
-      {pins}
-    </div>
-
-    <script>
-      (function(){{
-        const simulate = {auto_start};
-        const canvas = document.getElementById("cloud");
-        const wrap = document.getElementById("roomwrap");
-        const sh = document.getElementById("shutter");
-        const ctx = canvas.getContext("2d");
-
-        function resize() {{
-          const rect = wrap.getBoundingClientRect();
-          canvas.width = rect.width;
-          canvas.height = rect.height;
-        }}
-        resize(); window.addEventListener('resize', resize);
-
-        let t0 = null, raf = null;
-        function hexToRGBA(hex, a) {{
-          const c = hex.replace('#','');
-          const r = parseInt(c.substring(0,2),16);
-          const g = parseInt(c.substring(2,4),16);
-          const b = parseInt(c.substring(4,6),16);
-          return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
-        }}
-
-        function draw(ts) {{
-          if (!t0) t0 = ts;
-          const t = (ts - t0)/1000;
-          ctx.clearRect(0,0,canvas.width,canvas.height);
-
-          for (let i=0;i<28;i++) {{
-            const ang = i * 0.25;
-            const rad = 20 + t*60 + i*8;
-            const x = canvas.width*0.55 + Math.cos(ang)*rad;
-            const y = canvas.height*0.55 + Math.sin(ang)*rad*0.62;
-            const a = Math.max(0, 0.55 - i*0.02 - t*0.07);
-            ctx.beginPath();
-            ctx.fillStyle = hexToRGBA("{cloud_color}", a);
-            ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2);
-            ctx.fill();
-          }}
-          raf = requestAnimationFrame(draw);
-        }}
-
-        function start() {{
-          if (raf) cancelAnimationFrame(raf);
-          t0 = null;
-          sh.classList.add('active');
-          raf = requestAnimationFrame(draw);
-          setTimeout(() => {{
-            sh.classList.remove('active');
-            if (raf) cancelAnimationFrame(raf);
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-          }}, 12000);
-        }}
-
-        if (simulate) start();
-      }})();
-    </script>
-    """
     with colL:
+        auto_start = "true" if simulate else "false"
+        gas = selected_detector or (dets[0]["label"] if dets else "CO")
+        cloud_color = GAS_COLORS.get(gas, "#38bdf8")
+
+        room_html = f"""
+        <style>
+          .roomwrap {{
+            position:relative; width:100%; max-width:1200px; margin:6px 0;
+            border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
+            box-shadow:0 18px 60px rgba(0,0,0,.30);
+          }}
+          .roomwrap img {{ display:block; width:100%; height:auto; }}
+
+          .detector {{
+            position:absolute; transform:translate(-50%,-50%);
+            border:2px solid #22c55e; border-radius:10px; background:#fff;
+            padding:6px 10px; min-width:72px; text-align:center; z-index:20;
+            box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
+          }}
+          .detector:hover {{ background:#eaffea; }}
+          .detector .lbl {{ font-size:14px; line-height:1.1; }}
+
+          canvas.cloud {{
+            position:absolute; left:0; top:0; width:100%; height:100%;
+            pointer-events:none; z-index:15;
+          }}
+          .shutter {{
+            position:absolute; right:0; top:0; width:24px; height:100%;
+            background:rgba(15,23,42,.55);
+            transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
+            border-left:2px solid rgba(148,163,184,.5);
+          }}
+          .shutter.active {{ transform:translateX(0%); }}
+        </style>
+
+        <div id="roomwrap" class="roomwrap">
+          <img id="roomimg" src="{_img64(room_path)}" alt="{room}"/>
+          <canvas id="cloud" class="cloud"></canvas>
+          <div id="shutter" class="shutter"></div>
+          {pins}
+        </div>
+
+        <script>
+          (function(){{
+            const simulate = {auto_start};
+            const canvas = document.getElementById("cloud");
+            const wrap = document.getElementById("roomwrap");
+            const sh = document.getElementById("shutter");
+            const ctx = canvas.getContext("2d");
+
+            function resize() {{
+              const rect = wrap.getBoundingClientRect();
+              canvas.width = rect.width;
+              canvas.height = rect.height;
+            }}
+            resize(); window.addEventListener('resize', resize);
+
+            let t0 = null, raf = null;
+            function hexToRGBA(hex, a) {{
+              const c = hex.replace('#','');
+              const r = parseInt(c.substring(0,2),16);
+              const g = parseInt(c.substring(2,4),16);
+              const b = parseInt(c.substring(4,6),16);
+              return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+            }}
+
+            function draw(ts) {{
+              if (!t0) t0 = ts;
+              const t = (ts - t0)/1000;
+              ctx.clearRect(0,0,canvas.width,canvas.height);
+
+              for (let i=0;i<28;i++) {{
+                const ang = i * 0.25;
+                const rad = 20 + t*60 + i*8;
+                const x = canvas.width*0.55 + Math.cos(ang)*rad;
+                const y = canvas.height*0.55 + Math.sin(ang)*rad*0.62;
+                const a = Math.max(0, 0.55 - i*0.02 - t*0.07);
+                ctx.beginPath();
+                ctx.fillStyle = hexToRGBA("{cloud_color}", a);
+                ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2);
+                ctx.fill();
+              }}
+              raf = requestAnimationFrame(draw);
+            }}
+
+            function start() {{
+              if (raf) cancelAnimationFrame(raf);
+              t0 = null;
+              sh.classList.add('active');
+              raf = requestAnimationFrame(draw);
+              setTimeout(() => {{
+                sh.classList.remove('active');
+                if (raf) cancelAnimationFrame(raf);
+                ctx.clearRect(0,0,canvas.width,canvas.height);
+              }}, 12000);
+            }}
+
+            if (simulate) start();
+          }})();
+        </script>
+        """
         components.html(room_html, height=720, scrolling=False)
 
-    # RIGHT: chart + AI
+    # RIGHT: chart + AI (no auto-refresh; use small controls)
     with colR:
         if selected_detector:
             st.subheader(f"📈 {selected_detector} — Live trend")
+            # controls to advance the line without reloading the whole page
+            cc1, cc2, cc3 = st.columns(3)
+            if cc1.button("Add 5s of data", key=f"add5_{room}_{selected_detector}"):
+                _add_points(room, selected_detector, 5)
+                st.rerun()
+            if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
+                _add_points(room, selected_detector, 15)
+                st.rerun()
+            if cc3.button("Spike", key=f"spike_{room}_{selected_detector}"):
+                # push a short spike
+                for _ in range(5):
+                    _add_points(room, selected_detector, 1)
+                    st.session_state["det_sim"][_sim_key(room, selected_detector)] = \
+                        st.session_state["det_sim"].get(_sim_key(room, selected_detector), 10.0) + 5.0
+                st.rerun()
+
             series = _series(room, selected_detector, n=90)
             st.line_chart({"reading": series})
             latest = series[-1] if series else 0.0
@@ -348,6 +358,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             st.write(msg)
         else:
             st.info("Click a detector badge on the image (or the backup buttons) to view its live trend.")
+
         st.divider()
         st.subheader("🤖 AI Safety Assistant")
         if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
@@ -357,19 +368,6 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
                 "evacuate if O₂ < 19.5%."
             )
 
-# ---------- simple pages ----------
-def render_settings():
-    st.write("Thresholds, units, and integrations will live here.")
-    st.write("To adjust placements, edit HOTSPOTS and DETECTORS in utils/facility.py.")
-
-def render_ai_chat():
-    st.chat_message("ai").write("Hi, I’m your safety AI. Ask me about leaks, thresholds, or actions.")
-    if p := st.chat_input("Ask the AI Safety Assistant…", key="chat_global"):
-        st.chat_message("user").write(p)
-        st.chat_message("ai").write(
-            "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
-            "verify detector calibrations and evacuate if O₂ < 19.5%."
-        )
 
 
 
