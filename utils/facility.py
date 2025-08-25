@@ -530,6 +530,187 @@ def build_facility_snapshot() -> dict:
 def export_incident_html(logs: dict, brand: dict | None = None) -> str:
     navy = brand.get("navy", "#0a2342") if brand else "#0a2342"
     red = brand.get("red", "#d81f26") if brand else "#d81f26"
+def render_live_only(
+    images_dir: Path,
+    room: str,
+    selected_detector: str,
+    simulate: bool = False,
+    ai_force_rule: bool = False,
+    ops: dict | None = None,
+    brand: dict | None = None,
+):
+    """Room-agnostic live panel: premium chart + AI + operator actions (no image/hotspots)."""
+    ops = ops or {}
+    colL, colR = st.columns([2, 1], gap="large")
+
+    with colL:
+        st.subheader(f"📈 {room} — {selected_detector} Trend")
+
+        period = st.radio(
+            "Range",
+            ["Last 10 min", "Last 1 h", "Today", "7 days"],
+            horizontal=True,
+            key=f"rng_live_{room}_{selected_detector}"
+        )
+        now = int(time.time())
+        if period == "Last 10 min":
+            start = now - 10*60
+        elif period == "Last 1 h":
+            start = now - 60*60
+        elif period == "Today":
+            start = int(pd.Timestamp("today").replace(hour=0, minute=0, second=0).timestamp())
+        else:
+            start = now - 7*24*3600
+
+        df = history.fetch_series(room, selected_detector, start, now)
+        if df.empty:
+            st.info("No data for the selected range.")
+        else:
+            # projection slope from recent 15 points
+            recent = df.tail(15)
+            slope = 0.0
+            if len(recent) >= 2:
+                x = (recent["t"].astype("int64")//10**9 - int(recent["t"].iloc[0].timestamp())) / 60.0
+                y = recent["value"].to_numpy()
+                slope = float(np.polyfit(x, y, 1)[0])
+
+            proj_minutes = np.arange(1, 6)
+            last_v = float(df["value"].iloc[-1])
+            last_t = df["t"].iloc[-1]
+            proj_t = [last_t + pd.Timedelta(minutes=int(m)) for m in proj_minutes]
+            proj_v = [last_v + slope*m for m in proj_minutes]
+            df_proj = pd.DataFrame({"t": proj_t, "value": proj_v, "kind":"Projected"})
+            df_obs = df.assign(kind="Observed")
+            df_all = pd.concat([df_obs, df_proj], ignore_index=True)
+
+            gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
+            thr = THRESHOLDS.get(selected_detector, {})
+
+            base_chart = (
+                alt.Chart(df_all)
+                .mark_line()
+                .encode(
+                    x=alt.X("t:T", title="Time"),
+                    y=alt.Y("value:Q", title=f"Reading ({thr.get('units','')})"),
+                    strokeDash=alt.condition(
+                        alt.datum.kind == "Projected",
+                        alt.value([4,4]),
+                        alt.value([0,0])
+                    ),
+                    tooltip=[alt.Tooltip("t:T"), alt.Tooltip("value:Q", format=".2f"), "kind:N"],
+                    color=alt.Color("kind:N", scale=alt.Scale(range=[gas_color, gas_color]), legend=None),
+                )
+            )
+
+            layers = [base_chart]
+            if thr:
+                warn_rule = alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b")
+                alarm_rule = alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444")
+                layers.extend([warn_rule, alarm_rule])
+
+            st.altair_chart(alt.layer(*layers).resolve_scale(color="independent"), use_container_width=True)
+
+            latest = float(df["value"].iloc[-1])
+            status, msg = _status_for(selected_detector, latest)
+            st.markdown(f"**Current status:** {status}")
+            st.caption(msg)
+
+            # Honeywell pick
+            rec = HONEYWELL_REC.get(selected_detector)
+            if rec:
+                st.markdown(f"**Recommended hardware:** {rec}")
+
+            # status change → AI auto-log
+            key = _sim_key(room, selected_detector)
+            last_status = st.session_state.setdefault("last_status", {}).get(key)
+            if last_status != status:
+                st.session_state["last_status"][key] = status
+                mean, sd = history.stats(room, selected_detector, window_hours=24)
+
+                crossing = None
+                if thr:
+                    if thr["mode"] == "high" and latest >= thr["warn"]:
+                        crossing = 0 if latest >= thr["alarm"] else int(
+                            max(1, round((thr["alarm"] - latest) / max(slope, 1e-3)))
+                        )
+                    elif thr["mode"] == "low" and latest <= thr["warn"]:
+                        crossing = 0 if latest <= thr["alarm"] else int(
+                            max(1, round((latest - thr["alarm"]) / max(-slope, 1e-3)))
+                        )
+
+                prompt = f"[Live Panel] Status changed to {status}. Provide actionable steps (max 4 bullets)."
+                answer = ai.ask_ai(
+                    prompt,
+                    context={
+                        "room": room,
+                        "gas": selected_detector,
+                        "value": latest,
+                        "status": status,
+                        "thresholds": thr,
+                        "simulate": simulate,
+                        "recent_series": df["value"].tail(60).tolist(),
+                        "mean": mean,
+                        "std": sd,
+                        "projection_minutes": crossing
+                    },
+                    force_rule=ai_force_rule
+                )
+                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                log.append({"ts": int(time.time()), "text": answer})
+
+        # quick ticks to move the chart during a pitch
+        cc1, cc2, cc3 = st.columns(3)
+        if cc1.button("Add 5s", key=f"live_add5_{room}_{selected_detector}"):
+            # rely on history internals to grow series; fetch triggers gen
+            history.fetch_series(room, selected_detector, now-60*60, now)
+            st.rerun()
+        if cc2.button("Inject spike (5 min)", key=f"live_spike_{room}_{selected_detector}"):
+            history.inject_spike(room, selected_detector, when_ts=int(time.time()), duration_min=5, magnitude=5.0)
+            st.rerun()
+        if cc3.button("Add 15s", key=f"live_add15_{room}_{selected_detector}"):
+            history.fetch_series(room, selected_detector, now-60*60, now)
+            st.rerun()
+
+    with colR:
+        st.subheader("🤖 AI Safety Assistant (Live)")
+        if q := st.chat_input("Ask about thresholds, actions or risk…", key=f"chat_live_{room}"):
+            st.chat_message("user").write(q)
+            now = int(time.time())
+            df = history.fetch_series(room, selected_detector, now-3600, now)
+            latest = float(df["value"].iloc[-1]) if not df.empty else None
+            thr = THRESHOLDS.get(selected_detector, {})
+            status = "OK"
+            if latest is not None and thr:
+                status, _ = _status_for(selected_detector, latest)
+            ans = ai.ask_ai(
+                q,
+                context={
+                    "room": room,
+                    "gas": selected_detector,
+                    "value": latest,
+                    "status": status,
+                    "thresholds": thr,
+                    "simulate": simulate,
+                    "recent_series": df["value"].tail(60).tolist() if not df.empty else [],
+                    "mean": history.stats(room, selected_detector, 24)[0],
+                    "std": history.stats(room, selected_detector, 24)[1],
+                },
+                force_rule=ai_force_rule
+            )
+            st.chat_message("ai").write(ans)
+
+        # Display any operator actions captured this render
+        if ops:
+            action_txts = []
+            if ops.get("close_shutter"):
+                action_txts.append("Operator commanded shutters to close.")
+            if ops.get("ventilate"):
+                action_txts.append("Operator increased ventilation.")
+            if ops.get("reset"):
+                action_txts.append("Operator reset detector.")
+            if action_txts:
+                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                log.append({"ts": int(time.time()), "text": " ".join(action_txts)})
 
     html_parts = [f"""
     <html>
