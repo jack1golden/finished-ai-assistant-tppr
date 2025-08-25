@@ -3,17 +3,16 @@ from __future__ import annotations
 import os
 from typing import Dict, Any
 
-import streamlit as st  # <- to read st.secrets
+import streamlit as st  # to read st.secrets
 
 try:
     from openai import OpenAI
 except Exception:
-    OpenAI = None  # library not installed yet / not available
+    OpenAI = None
 
-MODEL = os.getenv("SAFETY_AI_MODEL", "gpt-4o-mini")  # change if you prefer
+MODEL = os.getenv("SAFETY_AI_MODEL", "gpt-4o-mini")
 
 def _get_api_key() -> str | None:
-    # Prefer env, then secrets (works on Streamlit Cloud)
     k = os.getenv("OPENAI_API_KEY")
     if k:
         return k
@@ -23,7 +22,6 @@ def _get_api_key() -> str | None:
         return None
 
 def is_available() -> bool:
-    """Returns True if an OpenAI key + library are available."""
     return bool(_get_api_key() and OpenAI is not None)
 
 def backend_name(force_rule: bool = False) -> str:
@@ -38,53 +36,45 @@ def _rule_based(prompt: str, context: Dict[str, Any]) -> str:
     status = context.get("status", "OK")
     thr = context.get("thresholds", {})
     simulate = context.get("simulate", False)
+    mean = context.get("mean")
+    std = context.get("std")
+    proj = context.get("projection_minutes")
 
     advice = []
     advice.append(f"Room: **{room}** • Gas: **{gas}** • Status: **{status}**")
+    if mean is not None and std is not None:
+        advice.append(f"Baseline (24h): μ={mean:.2f}, σ={std:.2f}")
     if value is not None and thr:
-        advice.append(f"Latest reading: **{value:.2f}{thr.get('units','')}**")
-        if thr.get("mode") == "low":
-            advice.append(f"Low‑warn: {thr['warn']}{thr['units']} • Low‑alarm: {thr['alarm']}{thr['units']}")
-        else:
-            advice.append(f"Warn: {thr['warn']}{thr['units']} • Alarm: {thr['alarm']}{thr['units']}")
+        advice.append(f"Latest: **{value:.2f}{thr.get('units','')}**  •  Warn: {thr.get('warn')}  •  Alarm: {thr.get('alarm')}")
+    if proj:
+        advice.append(f"Projected threshold crossing in ~{proj} min (estimate).")
 
     if status == "ALARM":
-        advice.append("**Actions now:** Close shutters, isolate source, stop work, evacuate to muster, and call ERT.")
-        if gas in ("H₂S", "CO"):
-            advice.append("Use gas monitors; SCBA required for re‑entry if concentrations are unknown.")
-        if gas in ("O₂",):
-            advice.append("Low O₂: treat as IDLH; ventilate and prevent confined‑space entry.")
+        advice.append("**Do now:** Close shutters, isolate source, stop work, evacuate to muster, notify ERT.")
     elif status == "WARN":
-        advice.append("**Actions:** Increase extraction/ventilation, check for leaks/consumption, prepare shutdown if trend continues.")
+        advice.append("**Mitigate:** Increase extraction, check for leaks/consumption, prepare shutdown if trend continues.")
     else:
-        advice.append("No abnormal conditions. Keep ventilation and routine checks in place.")
+        advice.append("Normal conditions. Maintain ventilation and routine checks.")
 
     if simulate:
         advice.append("_(Simulation mode active.)_")
 
     if prompt.strip():
-        advice.append(f"**Reply:** {prompt.strip()} → Prioritize isolation, ventilation control, and continuous monitoring.")
+        advice.append(f"**Reply:** {prompt.strip()} → prioritize isolation, ventilation control, and continuous monitoring.")
 
     return "\n\n".join(advice)
 
 def ask_ai(prompt: str, context: Dict[str, Any], force_rule: bool = False) -> str:
-    """
-    Returns an answer as markdown. Uses OpenAI if key/library present and force_rule=False,
-    else rule-based.
-    context keys: room, gas, value, status, thresholds, simulate, recent_series
-    """
     key = _get_api_key()
     if force_rule or not key or OpenAI is None:
         return _rule_based(prompt, context)
-
     try:
         client = OpenAI(api_key=key)
         sys_prompt = (
             "You are an industrial safety assistant for a pharmaceutical facility. "
-            "Give concise, actionable guidance using standards-informed best practice. "
-            "If status=ALARM, prioritize life safety and isolation. If status=WARN, "
-            "recommend immediate mitigations and verification. Avoid speculation. "
-            "Output in short paragraphs and bullets."
+            "Use the provided context (room, gas, latest value, thresholds, baseline stats, trend slope, etc.). "
+            "If status=ALARM, prioritize life safety and isolation. If status=WARN, recommend immediate mitigations. "
+            "Be concise, with short paragraphs and bullets when helpful."
         )
         msgs = [
             {"role": "system", "content": sys_prompt},
@@ -98,6 +88,6 @@ def ask_ai(prompt: str, context: Dict[str, Any], force_rule: bool = False) -> st
         )
         return resp.choices[0].message.content.strip()
     except Exception:
-        # Never break the demo
         return _rule_based(prompt, context)
+
 
