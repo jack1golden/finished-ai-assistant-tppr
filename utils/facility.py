@@ -38,45 +38,44 @@ def _find_first(images_dir: Path, names: list[str]) -> Path | None:
             return p
     return None
 
-# ---------- overview hotspots (unchanged except Room 12/17 up +8%) ----------
+# ---------- overview hotspots (latest positions + slight size tweaks) ----------
 HOTSPOTS = {
     "Room 1": dict(left=63, top=2,  width=14, height=16),
     "Room 2": dict(left=67, top=43, width=14, height=16),
     "Room 3": dict(left=60, top=19, width=14, height=16),
-    "Room 12 17": dict(left=38, top=-13, width=13, height=15),  # up +8% (was -5)
+    "Room 12 17": dict(left=38, top=-13, width=13, height=15),  # up +8%
     "Room Production": dict(left=24, top=28, width=23, height=21),
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (with your latest moves) ----------
-# Notes on % moves: “left +X%” means subtract X from x (move left), “right +X%” means add X to x.
+# ---------- detectors (latest moves applied) ----------
+# “left +X%” => x - X ; “right +X%” => x + X ; “up +X%” => y - X ; “down +X%” => y + X
 DETECTORS = {
     "Room 1": [
         dict(label="NH₃", x=35, y=35, units="ppm"),
     ],
     "Room 2": [
-        # was x=93,y=33 -> left +5%, down +5% => x=88, y=38
+        # was 93,33 → left +5% (=88), down +5% (=38)
         dict(label="CO", x=88, y=38, units="ppm"),
     ],
     "Room 3": [
-        # baseline we had x=28-25=3, y=72-25=47
-        # now: up +3% (y-3) and right +2% (x+2) => x=5, y=44
+        # earlier base was (3,47); now up +3 (44), right +2 (5)
         dict(label="O₂", x=5, y=44, units="%"),
     ],
     "Room 12 17": [
-        # previously moved up +5% already; no new detector shift here
-        dict(label="Ethanol", x=63, y=31, units="ppm"),  # (58+5, 36-5) from earlier
+        # previously at (63,31) after up+5%; no new change beyond that request
+        dict(label="Ethanol", x=63, y=31, units="ppm"),
     ],
     "Room Production": [
-        # NH3: previously x=30-8=22, now left +2% => x=20
+        # NH3: was (22,28) then left +2% => 20
         dict(label="NH₃", x=20, y=28, units="ppm"),
-        # O2: previously x=78+10=88, y=72-30=42, now up +2% => y=40
+        # O2: was (88,42) then up +2% => y=40
         dict(label="O₂", x=88, y=40, units="%"),
     ],
     "Room Production 2": [
-        # O2: previously x=70+5=75, now right +3% => 78
+        # O2: was (75,45) then right +3% => 78
         dict(label="O₂", x=78, y=45, units="%"),
-        # H2S: previously x=70-50=20, y=65-30=35 → left +2% => 18; up +4% => 31
+        # H2S: was (20,35) then left +2% => 18, up +4% => 31
         dict(label="H₂S", x=18, y=31, units="ppm"),
     ],
 }
@@ -196,7 +195,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
     pins = "\n".join(pins_html)
 
     auto_start = "true" if simulate else "false"
-    cloud_color = "#38bdf8"  # cyan-ish; could color by gas if we want per-detector later
+    cloud_color = "#38bdf8"  # cyan-ish
 
     room_html = f"""
     <style>
@@ -213,8 +212,8 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         padding:6px 10px; min-width:72px; text-align:center; z-index:20;
         box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
       }}
-      .detector:hover {{ background:#eaffea; }}
-      .detector .lbl {{ font-size:14px; line-height:1.1; }}
+        .detector:hover {{ background:#eaffea; }}
+        .detector .lbl {{ font-size:14px; line-height:1.1; }}
 
       canvas.cloud {{
         position:absolute; left:0; top:0; width:100%; height:100%;
@@ -245,9 +244,9 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
         const ctx = canvas.getContext("2d");
 
         function resize() {{
-          const r = wrap.getBoundingClientRect();
-          canvas.width = r.width;
-          canvas.height = r.height;
+          const rect = wrap.getBoundingClientRect();
+          canvas.width = rect.width;
+          canvas.height = rect.height;
         }}
         resize(); window.addEventListener('resize', resize);
 
@@ -257,7 +256,7 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
           const r = parseInt(c.substring(0,2),16);
           const g = parseInt(c.substring(2,4),16);
           const b = parseInt(c.substring(4,6),16);
-          return `rgba(${r},${g},${b},${a})`;
+          return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
         }}
 
         function draw(ts) {{
@@ -304,14 +303,11 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             st.subheader(f"📈 {selected_detector} — Live trend")
             series = _series(room, selected_detector, n=90)
             st.line_chart({"reading": series})
-            # light auto-refresh so the line moves during your pitch
-            st.experimental_set_query_params(room=room, det=selected_detector)
         else:
             st.info("Click a detector badge on the image to view its live trend.")
         st.divider()
         st.subheader("🤖 AI Safety Assistant")
         if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
-
             st.chat_message("user").write(p)
             st.chat_message("ai").write(
                 "Recommendation: close shutters; increase extraction; verify detector calibrations; "
@@ -326,12 +322,12 @@ def render_settings():
 def render_ai_chat():
     st.chat_message("ai").write("Hi, I’m your safety AI. Ask me about leaks, thresholds, or actions.")
     if p := st.chat_input("Ask the AI Safety Assistant…", key="chat_global"):
-
         st.chat_message("user").write(p)
         st.chat_message("ai").write(
             "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
             "verify detector calibrations and evacuate if O₂ < 19.5%."
         )
+
 
 
 
