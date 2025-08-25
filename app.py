@@ -48,7 +48,6 @@ with st.sidebar:
         st.query_params.clear()
     else:
         st.session_state["current_room"] = sel
-        # preserve selected det if already chosen, else none (the room UI sets it on click)
         st.query_params.update({"room": sel, **({"det": st.session_state["selected_detector"]} if st.session_state["selected_detector"] else {})})
 
     if st.session_state["current_room"] and st.session_state["current_room"] != "Overview":
@@ -89,13 +88,10 @@ if not room:
         if bcols[i].button(rn, key=f"open_{rn}"):
             st.session_state["current_room"] = rn
             st.query_params.update({"room": rn})
-            st.rerun()
+            st.rerun()  # navigate immediately
 else:
     st.subheader(f"🚪 {room}")
     simulate_flag = st.session_state["simulate_by_room"].get(room, False)
-
-    # lightweight auto-refresh via JS so charts update without st.autorefresh
-    facility.inject_autorefresh_ms(1500)
 
     facility.render_room(
         images_dir=IMAGES,
