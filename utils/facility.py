@@ -49,33 +49,28 @@ HOTSPOTS = {
 }
 
 # ---------- detectors (latest moves) ----------
-# Convention: left +X => x - X ; right +X => x + X ; up +X => y - X ; down +X => y + X
 DETECTORS = {
-    # perfect as-is
     "Room 1": [
         dict(label="NH₃", x=35, y=35, units="ppm"),
     ],
-    # move CO down +5
+    # CO: was 88,38 → down +8% → y=46
     "Room 2": [
-        dict(label="CO", x=88, y=43, units="ppm"),   # was 88,38 -> y+5
+        dict(label="CO", x=88, y=46, units="ppm"),
     ],
-    # perfect previously after prior tweak
     "Room 3": [
         dict(label="O₂", x=5, y=44, units="%"),
     ],
-    # ethanol up +8
+    # Ethanol: was 63,23 → up another +8% → y=15
     "Room 12 17": [
-        dict(label="Ethanol", x=63, y=23, units="ppm"),  # was 63,31 -> y-8
+        dict(label="Ethanol", x=63, y=15, units="ppm"),
     ],
-    # perfect as-is
     "Room Production": [
         dict(label="NH₃", x=20, y=28, units="ppm"),
         dict(label="O₂", x=88, y=40, units="%"),
     ],
-    # H2S up +2 & left +3; O2 right +5
     "Room Production 2": [
-        dict(label="O₂", x=83, y=45, units="%"),        # was 78,45 -> x+5
-        dict(label="H₂S", x=15, y=29, units="ppm"),     # was 18,31 -> x-3, y-2
+        dict(label="O₂", x=83, y=45, units="%"),
+        dict(label="H₂S", x=15, y=29, units="ppm"),
     ],
 }
 
