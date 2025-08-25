@@ -362,6 +362,7 @@ def render_room(
             if df.empty:
                 st.info("No data for the selected range.")
             else:
+                # slope over last 15 minutes
                 recent = df.tail(15)
                 slope = 0.0
                 if len(recent) >= 2:
@@ -369,6 +370,7 @@ def render_room(
                     y = recent["value"].to_numpy()
                     slope = float(np.polyfit(x, y, 1)[0])
 
+                # 5‑minute projection
                 proj_minutes = np.arange(1, 6)
                 last_v = float(df["value"].iloc[-1])
                 last_t = df["t"].iloc[-1]
@@ -380,21 +382,202 @@ def render_room(
 
                 gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
                 thr = THRESHOLDS.get(selected_detector, {})
+
                 base_chart = (
                     alt.Chart(df_all)
                     .mark_line()
                     .encode(
                         x=alt.X("t:T", title="Time"),
                         y=alt.Y("value:Q", title=f"Reading ({thr.get('units','')})"),
-                        strokeDash=alt.condition(alt.datum.kind == "Projected",
-                                                 alt.value([4,4]), alt.value([0,0])),
+                        strokeDash=alt.condition(
+                            alt.datum.kind == "Projected",
+                            alt.value([4,4]),
+                            alt.value([0,0])
+                        ),
                         tooltip=[alt.Tooltip("t:T"), alt.Tooltip("value:Q", format=".2f"), "kind:N"],
                         color=alt.Color("kind:N", scale=alt.Scale(range=[gas_color, gas_color]), legend=None),
                     )
                 )
-                rules = []
+
+                # Threshold rules
+                layers = [base_chart]
                 if thr:
-                    rules.append(alt)
+                    warn_rule = alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b")
+                    alarm_rule = alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444")
+                    layers.extend([warn_rule, alarm_rule])
+
+                st.altair_chart(alt.layer(*layers).resolve_scale(color="independent"), use_container_width=True)
+
+                latest = float(df["value"].iloc[-1])
+                status, msg = _status_for(selected_detector, latest)
+                st.markdown(f"**Status:** {status}")
+                st.caption(msg)
+
+                # AI auto‑log on status change
+                key = _sim_key(room, selected_detector)
+                last_status = st.session_state.setdefault("last_status", {}).get(key)
+                if last_status != status:
+                    st.session_state["last_status"][key] = status
+                    mean, sd = history.stats(room, selected_detector, window_hours=24)
+                    crossing = None
+                    if thr:
+                        if thr["mode"] == "high" and latest >= thr["warn"]:
+                            crossing = 0 if latest >= thr["alarm"] else int(max(1, round((thr["alarm"]-latest)/max(slope,1e-3))))
+                        elif thr["mode"] == "low" and latest <= thr["warn"]:
+                            crossing = 0 if latest <= thr["alarm"] else int(max(1, round((latest-thr["alarm"])/max(-slope,1e-3))))
+                    prompt = f"Status changed to {status}. Provide actionable steps (max 4 bullets)."
+                    answer = ai.ask_ai(
+                        prompt,
+                        context={
+                            "room": room,
+                            "gas": selected_detector,
+                            "value": latest,
+                            "status": status,
+                            "thresholds": thr,
+                            "simulate": simulate,
+                            "recent_series": df["value"].tail(60).tolist(),
+                            "mean": mean,
+                            "std": sd,
+                            "projection_minutes": crossing
+                        },
+                        force_rule=ai_force_rule
+                    )
+                    log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                    log.append({"ts": int(time.time()), "text": answer})
+
+            # Manual data helpers (optional for demo feel)
+            cc1, cc2, cc3 = st.columns(3)
+            if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
+                _add_points(room, selected_detector, 5); st.rerun()
+            if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
+                _add_points(room, selected_detector, 15); st.rerun()
+            if cc3.button("Spike (overlay)", key=f"spike_{room}_{selected_detector}"):
+                now_ts = int(time.time())
+                history.inject_spike(room, selected_detector, when_ts=now_ts, duration_min=5, magnitude=5.0)
+                _add_points(room, selected_detector, 5)
+                thr = THRESHOLDS.get(selected_detector, {})
+                mean, sd = history.stats(room, selected_detector, window_hours=24)
+                answer = ai.ask_ai(
+                    "Detected spike injected for demo. Summarize recommended immediate actions (3 bullets).",
+                    context={
+                        "room": room,
+                        "gas": selected_detector,
+                        "value": None,
+                        "status": "WARN",
+                        "thresholds": thr,
+                        "simulate": True,
+                        "mean": mean,
+                        "std": sd
+                    },
+                    force_rule=ai_force_rule
+                )
+                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                log.append({"ts": int(time.time()), "text": answer})
+                st.rerun()
+        else:
+            st.info("Click a detector badge on the image (or use the selector above) to view its trend.")
+
+        st.divider()
+        st.subheader("🤖 AI Safety Assistant")
+        if selected_detector:
+            if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
+                st.chat_message("user").write(p)
+                now = int(time.time())
+                df = history.fetch_series(room, selected_detector, now-3600, now)
+                latest = float(df["value"].iloc[-1]) if not df.empty else None
+                thr = THRESHOLDS.get(selected_detector, {})
+                mean, sd = history.stats(room, selected_detector, window_hours=24)
+                status = "OK"
+                if latest is not None and thr:
+                    status, _ = _status_for(selected_detector, latest)
+
+                answer = ai.ask_ai(
+                    p,
+                    context={
+                        "room": room,
+                        "gas": selected_detector,
+                        "value": latest,
+                        "status": status,
+                        "thresholds": thr,
+                        "simulate": simulate,
+                        "recent_series": df["value"].tail(60).tolist() if not df.empty else [],
+                        "mean": mean,
+                        "std": sd
+                    },
+                    force_rule=ai_force_rule
+                )
+                st.chat_message("ai").write(answer)
+
+        # Log operator actions (ack, shutter, vent, reset)
+        if ops:
+            action_txts = []
+            if ops.get("ack"):
+                action_txts.append("Operator acknowledged alarm.")
+            if ops.get("close_shutter"):
+                action_txts.append("Operator commanded shutters to close.")
+            if ops.get("ventilate"):
+                action_txts.append("Operator increased ventilation.")
+            if ops.get("reset"):
+                action_txts.append("Operator reset detector.")
+            if action_txts:
+                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
+                log.append({"ts": int(time.time()), "text": " ".join(action_txts)})
+
+# ======================================================
+# Facility snapshot + export
+# ======================================================
+def build_facility_snapshot() -> dict:
+    """Compact snapshot used by the global AI assistant."""
+    snapshot = {}
+    for room, dets in DETECTORS.items():
+        node = {}
+        for d in dets:
+            label = d["label"]
+            val = history.latest_value(room, label)
+            if val is None:
+                continue
+            status, _ = _status_for(label, val)
+                       node[label] = {
+                "value": float(val),
+                "status": status,
+                "thresholds": THRESHOLDS.get(label, {})
+            }
+        snapshot[room] = node
+    return snapshot
+
+
+def export_incident_html(logs: dict, brand: dict | None = None) -> str:
+    """Export AI event log as branded HTML."""
+    navy = brand.get("navy", "#0a2342") if brand else "#0a2342"
+    red = brand.get("red", "#d81f26") if brand else "#d81f26"
+
+    html_parts = [f"""
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>OBW Incident Log</title>
+        <style>
+          body {{ font-family: Arial, sans-serif; margin: 20px; background:#fff; }}
+          h1 {{ color:{navy}; }}
+          .entry {{ margin:8px 0; padding:6px 10px; border-left:4px solid {red}; background:#f9f9f9; }}
+          .room {{ font-weight: bold; color:{navy}; }}
+          .ts {{ font-size:0.85em; color:#666; }}
+        </style>
+      </head>
+      <body>
+        <h1>OBW — Incident Log</h1>
+    """]
+    for room, entries in logs.items():
+        if not entries:
+            continue
+        html_parts.append(f"<h2 style='color:{red}'>{room}</h2>")
+        for e in entries:
+            tstr = ts_str(e["ts"])
+            html_parts.append(f"<div class='entry'><span class='ts'>{tstr}</span><br/>{e['text']}</div>")
+    html_parts.append("</body></html>")
+    return "\n".join(html_parts)
+
+
 
 
 
