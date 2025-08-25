@@ -310,7 +310,8 @@ def render_room(images_dir: Path, room: str, simulate: bool = False, selected_de
             st.info("Click a detector badge on the image to view its live trend.")
         st.divider()
         st.subheader("🤖 AI Safety Assistant")
-        if p := st.chat_input("Ask about leaks, thresholds or actions…"):
+        if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
+
             st.chat_message("user").write(p)
             st.chat_message("ai").write(
                 "Recommendation: close shutters; increase extraction; verify detector calibrations; "
@@ -324,7 +325,8 @@ def render_settings():
 
 def render_ai_chat():
     st.chat_message("ai").write("Hi, I’m your safety AI. Ask me about leaks, thresholds, or actions.")
-    if p := st.chat_input("Ask the AI Safety Assistant…"):
+    if p := st.chat_input("Ask the AI Safety Assistant…", key="chat_global"):
+
         st.chat_message("user").write(p)
         st.chat_message("ai").write(
             "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
