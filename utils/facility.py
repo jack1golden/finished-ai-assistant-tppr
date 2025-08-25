@@ -29,6 +29,9 @@ def _exists(p: Path) -> bool:
 def get_detectors_for(room: str):
     return DETECTORS.get(room, [])
 
+def ts_str(ts: int) -> str:
+    return pd.to_datetime(ts, unit="s").strftime("%Y-%m-%d %H:%M:%S")
+
 # ---------- file candidates ----------
 OVERVIEW_CANDS = ["Overview.png", "Overview (1).png", "overview.png"]
 ROOM_FILES = {
@@ -57,7 +60,7 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (final placements) ----------
+# ---------- detectors (final placements you gave) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO",  x=85, y=62, units="ppm")],
@@ -83,11 +86,11 @@ THRESHOLDS = {
 }
 
 GAS_COLORS = {
-    "NH₃": "#8b5cf6",
-    "CO": "#ef4444",
-    "O₂": "#60a5fa",
-    "H₂S": "#eab308",
-    "Ethanol": "#fb923c",
+    "NH₃": "#8b5cf6",     # purple
+    "CO": "#ef4444",      # red
+    "O₂": "#60a5fa",      # blue
+    "H₂S": "#eab308",     # yellow
+    "Ethanol": "#fb923c", # orange
 }
 
 # ---------- live series sim (for manual chart ticks) ----------
@@ -163,7 +166,6 @@ def render_overview(images_dir: Path):
         st.error("Overview image not found in /images.")
         return
 
-    # Traffic-light strip
     chips = "".join(_status_chip(r) for r in ["Room 1","Room 2","Room 3","Room Production","Room Production 2","Room 12 17"])
 
     hotspots_html = []
@@ -188,41 +190,22 @@ def render_overview(images_dir: Path):
     tags = "\n".join(hotspots_html)
 
     html = f"""
-    <style>
-      .strip {{
-        display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 10px 0;
-      }}
-      .chip {{
-        display:inline-block; color:#0b1220; font-weight:800; padding:6px 10px;
-        border-radius:999px; box-shadow:0 1px 6px rgba(0,0,0,.2);
-      }}
-      .wrap {{
-        position:relative; width:min(1280px,96%); margin:8px auto;
-        border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
-        box-shadow:0 18px 60px rgba(0,0,0,.35);
-      }}
-      .wrap img {{ display:block; width:100%; height:auto; }}
-      .hotspot {{
-        position:absolute; border:2px solid rgba(34,197,94,.9); border-radius:10px;
-        background:rgba(16,185,129,.18); color:#e2e8f0; font-weight:800; font-size:12px;
-        display:flex; align-items:flex-start; justify-content:flex-start; padding:4px 6px; z-index:20;
-        text-decoration:none;
-      }}
-      .hotspot:hover {{ background:rgba(16,185,129,.28); }}
-      .hotspot span {{
-        background:rgba(2,6,23,.55); border:1px solid rgba(103,232,249,.5); padding:2px 6px; border-radius:8px;
-      }}
-    </style>
-    <div class="strip">{chips}</div>
-    <div class="wrap">
-      <img src="{_img64(ov_path)}" alt="overview"/>
+    <div class="strip" style="display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 10px 0;">{chips}</div>
+    <div class="wrap" style="
+      position:relative; width:min(1280px,96%); margin:8px auto;
+      border:2px solid #0a2342; border-radius:12px; overflow:hidden;
+      box-shadow:0 18px 60px rgba(0,0,0,.20); background:#fff;">
+      <img src="{_img64(ov_path)}" alt="overview" style="display:block; width:100%; height:auto;" />
       {tags}
+      <div style="position:absolute; right:10px; bottom:8px; color:#d81f26; font-weight:700; background:#fff9; padding:2px 6px; border-radius:6px; border:1px solid #0a2342;">
+        OBW Technologies
+      </div>
     </div>
     """
     components.html(html, height=820, scrolling=False)
 
 # ======================================================
-# Room view — timeline, predictive chart, AI auto‑log
+# Room view — image + badges + gas cloud/shutter + timeline + predictive chart + AI + auto‑log
 # ======================================================
 def render_room(
     images_dir: Path,
@@ -230,6 +213,8 @@ def render_room(
     simulate: bool = False,
     selected_detector: str | None = None,
     ai_force_rule: bool = False,
+    ops: dict | None = None,
+    brand: dict | None = None,
 ):
     room_path = _find_first(images_dir, ROOM_FILES.get(room, []))
     if not room_path:
@@ -239,7 +224,7 @@ def render_room(
     dets = DETECTORS.get(room, [])
     colL, colR = st.columns([2, 1], gap="large")
 
-    # LEFT: image + detector buttons + gas cloud + shutter
+    # Build detector pins
     pins_html = []
     for d in dets:
         lbl = d["label"]
@@ -262,52 +247,36 @@ def render_room(
         )
     pins = "\n".join(pins_html)
 
+    # Operator one-shot triggers
+    ops = ops or {}
+    trigger_shutter = "true" if ops.get("close_shutter") else "false"
+    trigger_vent = "true" if ops.get("ventilate") else "false"
+    trigger_reset = "true" if ops.get("reset") else "false"
+    trigger_ack = "true" if ops.get("ack") else "false"
+    auto_cloud = "true" if simulate else "false"
+
     with colL:
-        auto_start = "true" if simulate else "false"
-        gas = selected_detector or (dets[0]["label"] if dets else "CO")
-        cloud_color = GAS_COLORS.get(gas, "#38bdf8")
-
+        cloud_color = GAS_COLORS.get(selected_detector or (dets[0]["label"] if dets else "CO"), "#38bdf8")
         room_html = f"""
-        <style>
-          .roomwrap {{
+        <div id="roomwrap" style="
             position:relative; width:100%; max-width:1200px; margin:6px 0;
-            border:1px solid #1f2a44; border-radius:12px; overflow:hidden;
-            box-shadow:0 18px 60px rgba(0,0,0,.30);
-          }}
-          .roomwrap img {{ display:block; width:100%; height:auto; }}
-
-          .detector {{
-            position:absolute; transform:translate(-50%,-50%);
-            border:2px solid #22c55e; border-radius:10px; background:#fff;
-            padding:6px 10px; min-width:72px; text-align:center; z-index:20;
-            box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
-          }}
-          .detector:hover {{ background:#eaffea; }}
-          .detector .lbl {{ font-size:14px; line-height:1.1; }}
-
-          canvas.cloud {{
-            position:absolute; left:0; top:0; width:100%; height:100%;
-            pointer-events:none; z-index:15;
-          }}
-          .shutter {{
-            position:absolute; right:0; top:0; width:24px; height:100%;
-            background:rgba(15,23,42,.55);
-            transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
-            border-left:2px solid rgba(148,163,184,.5);
-          }}
-          .shutter.active {{ transform:translateX(0%); }}
-        </style>
-
-        <div id="roomwrap" class="roomwrap">
-          <img id="roomimg" src="{_img64(room_path)}" alt="{room}"/>
-          <canvas id="cloud" class="cloud"></canvas>
-          <div id="shutter" class="shutter"></div>
+            border:2px solid #0a2342; border-radius:12px; overflow:hidden;
+            box-shadow:0 18px 60px rgba(0,0,0,.12); background:#fff;">
+          <img id="roomimg" src="{_img64(room_path)}" alt="{room}" style="display:block; width:100%; height:auto;" />
+          <canvas id="cloud" class="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
+          <div id="shutter" style="
+              position:absolute; right:0; top:0; width:26px; height:100%;
+              background:rgba(15,23,42,.55);
+              transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
+              border-left:2px solid rgba(148,163,184,.5);"></div>
           {pins}
         </div>
-
         <script>
           (function(){{
-            const simulate = {auto_start};
+            const autoCloud = {auto_cloud};
+            const triggerShutter = {trigger_shutter};
+            const triggerVent = {trigger_vent};
+            const triggerReset = {trigger_reset};
             const canvas = document.getElementById("cloud");
             const wrap = document.getElementById("roomwrap");
             const sh = document.getElementById("shutter");
@@ -329,11 +298,10 @@ def render_room(
               return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
             }}
 
-            function draw(ts) {{
+            function drawCloud(ts) {{
               if (!t0) t0 = ts;
               const t = (ts - t0)/1000;
               ctx.clearRect(0,0,canvas.width,canvas.height);
-
               for (let i=0;i<28;i++) {{
                 const ang = i * 0.25;
                 const rad = 20 + t*60 + i*8;
@@ -345,31 +313,34 @@ def render_room(
                 ctx.arc(x, y, 32 + i*0.8 + t*3, 0, Math.PI*2);
                 ctx.fill();
               }}
-              raf = requestAnimationFrame(draw);
+              raf = requestAnimationFrame(drawCloud);
             }}
-
-            function start() {{
+            function startCloud() {{
               if (raf) cancelAnimationFrame(raf);
               t0 = null;
-              sh.classList.add('active');
-              raf = requestAnimationFrame(draw);
-              setTimeout(() => {{
-                sh.classList.remove('active');
-                if (raf) cancelAnimationFrame(raf);
-                ctx.clearRect(0,0,canvas.width,canvas.height);
-              }}, 12000);
+              raf = requestAnimationFrame(drawCloud);
             }}
-
-            if (simulate) start();
+            function clearCloud() {{
+              if (raf) cancelAnimationFrame(raf);
+              ctx.clearRect(0,0,canvas.width,canvas.height);
+            }}
+            function closeShutter() {{
+              sh.classList.add('active');
+              sh.style.transform = 'translateX(0%)';
+              setTimeout(()=>{{ sh.style.transform = 'translateX(110%)'; }}, 6000);
+            }}
+            if (autoCloud) startCloud();
+            if (triggerShutter) closeShutter();
+            if (triggerVent) clearCloud();
+            if (triggerReset) {{ clearCloud(); }}
           }})();
         </script>
         """
         components.html(room_html, height=720, scrolling=False)
 
-    # RIGHT: timeline, predictive chart, AI (with auto-event log)
+    # RIGHT side: timeline, predictive chart, AI + auto‑log + action logging
     with colR:
         if selected_detector:
-            # Timeline picker
             st.subheader(f"📈 {selected_detector} — Trend")
             period = st.radio(
                 "Range",
@@ -383,37 +354,29 @@ def render_room(
             elif period == "Last 1 h":
                 start = now - 60*60
             elif period == "Today":
-                # midnight
                 start = int(pd.Timestamp("today").replace(hour=0, minute=0, second=0).timestamp())
             else:
                 start = now - 7*24*3600
 
-            # Fetch history (minutes) and build chart
             df = history.fetch_series(room, selected_detector, start, now)
             if df.empty:
                 st.info("No data for the selected range.")
             else:
-                # Compute slope over last 15 minutes for projection
                 recent = df.tail(15)
                 slope = 0.0
                 if len(recent) >= 2:
-                    # minutes vs value
                     x = (recent["t"].astype("int64")//10**9 - int(recent["t"].iloc[0].timestamp())) / 60.0
                     y = recent["value"].to_numpy()
                     slope = float(np.polyfit(x, y, 1)[0])
 
-                # Project next 5 minutes
                 proj_minutes = np.arange(1, 6)
-                if not df.empty:
-                    last_t = df["t"].iloc[-1]
-                    last_v = float(df["value"].iloc[-1])
-                    proj_t = [last_t + pd.Timedelta(minutes=int(m)) for m in proj_minutes]
-                    proj_v = [last_v + slope*m for m in proj_minutes]
-                    df_proj = pd.DataFrame({"t": proj_t, "value": proj_v, "kind":"Projected"})
-                    df_obs = df.assign(kind="Observed")
-                    df_all = pd.concat([df_obs, df_proj], ignore_index=True)
-                else:
-                    df_all = df.assign(kind="Observed")
+                last_v = float(df["value"].iloc[-1])
+                last_t = df["t"].iloc[-1]
+                proj_t = [last_t + pd.Timedelta(minutes=int(m)) for m in proj_minutes]
+                proj_v = [last_v + slope*m for m in proj_minutes]
+                df_proj = pd.DataFrame({"t": proj_t, "value": proj_v, "kind":"Projected"})
+                df_obs = df.assign(kind="Observed")
+                df_all = pd.concat([df_obs, df_proj], ignore_index=True)
 
                 gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
                 thr = THRESHOLDS.get(selected_detector, {})
@@ -429,132 +392,10 @@ def render_room(
                         color=alt.Color("kind:N", scale=alt.Scale(range=[gas_color, gas_color]), legend=None),
                     )
                 )
-
                 rules = []
                 if thr:
-                    # Warn & alarm guides
-                    rules.append(
-                        alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b").encode(y="y:Q")
-                    )
-                    rules.append(
-                        alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444").encode(y="y:Q")
-                    )
-                st.altair_chart(base_chart + sum(rules[1:], rules[0]) if rules else base_chart, use_container_width=True)
+                    rules.append(alt
 
-                latest = float(df["value"].iloc[-1])
-                status, msg = _status_for(selected_detector, latest)
-                st.markdown(f"**Status:** {status}")
-                st.caption(msg)
-
-                # AI auto‑log on status change
-                key = _sim_key(room, selected_detector)
-                last_status = st.session_state.setdefault("last_status", {}).get(key)
-                if last_status != status:
-                    st.session_state["last_status"][key] = status
-                    mean, sd = history.stats(room, selected_detector, window_hours=24)
-                    crossing = None
-                    if thr:
-                        if thr["mode"] == "high" and latest >= thr["warn"]:
-                            crossing = 0 if latest >= thr["alarm"] else int(max(1, round((thr["alarm"]-latest)/max(slope,1e-3))))
-                        elif thr["mode"] == "low" and latest <= thr["warn"]:
-                            crossing = 0 if latest <= thr["alarm"] else int(max(1, round((latest-thr["alarm"])/max(-slope,1e-3))))
-                    prompt = f"Status changed to {status}. Provide actionable steps (max 4 bullets)."
-                    answer = ai.ask_ai(
-                        prompt,
-                        context={
-                            "room": room,
-                            "gas": selected_detector,
-                            "value": latest,
-                            "status": status,
-                            "thresholds": thr,
-                            "simulate": simulate,
-                            "recent_series": df["value"].tail(60).tolist(),
-                            "mean": mean,
-                            "std": sd,
-                            "projection_minutes": crossing
-                        },
-                        force_rule=ai_force_rule
-                    )
-                    log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
-                    log.append({"ts": int(time.time()), "text": answer})
-
-            # Manual data tickers for the live look
-            cc1, cc2, cc3 = st.columns(3)
-            if cc1.button("Add 5s", key=f"add5_{room}_{selected_detector}"):
-                _add_points(room, selected_detector, 5)
-                st.rerun()
-            if cc2.button("Add 15s", key=f"add15_{room}_{selected_detector}"):
-                _add_points(room, selected_detector, 15)
-                st.rerun()
-            if cc3.button("Spike (overlay)", key=f"spike_{room}_{selected_detector}"):
-                # Add spike into history for next 5 minutes to make it visible in timeline
-                now_ts = int(time.time())
-                history.inject_spike(room, selected_detector, when_ts=now_ts, duration_min=5, magnitude=5.0)
-                # Also nudge the session buffer for immediate visual feedback
-                _add_points(room, selected_detector, 5)
-                # AI narrate the spike
-                thr = THRESHOLDS.get(selected_detector, {})
-                mean, sd = history.stats(room, selected_detector, window_hours=24)
-                answer = ai.ask_ai(
-                    "Detected spike injected for demo. Summarize recommended immediate actions (3 bullets).",
-                    context={
-                        "room": room,
-                        "gas": selected_detector,
-                        "value": None,
-                        "status": "WARN",
-                        "thresholds": thr,
-                        "simulate": True,
-                        "mean": mean,
-                        "std": sd
-                    },
-                    force_rule=ai_force_rule
-                )
-                log = st.session_state.setdefault("ai_log", {}).setdefault(room, [])
-                log.append({"ts": int(time.time()), "text": answer})
-                st.rerun()
-
-        else:
-            st.info("Click a detector badge on the image (or the backup buttons) to view its trend.")
-
-        st.divider()
-        st.subheader("🤖 AI Safety Assistant")
-        if selected_detector:
-            if p := st.chat_input("Ask about leaks, thresholds or actions…", key=f"chat_{room}"):
-                st.chat_message("user").write(p)
-                # Pull latest + stats for richer context
-                now = int(time.time())
-                df = history.fetch_series(room, selected_detector, now-3600, now)
-                latest = float(df["value"].iloc[-1]) if not df.empty else None
-                thr = THRESHOLDS.get(selected_detector, {})
-                mean, sd = history.stats(room, selected_detector, window_hours=24)
-                status = "OK"
-                if latest is not None and thr:
-                    status, _ = _status_for(selected_detector, latest)
-
-                answer = ai.ask_ai(
-                    p,
-                    context={
-                        "room": room,
-                        "gas": selected_detector,
-                        "value": latest,
-                        "status": status,
-                        "thresholds": thr,
-                        "simulate": simulate,
-                        "recent_series": df["value"].tail(60).tolist() if not df.empty else [],
-                        "mean": mean,
-                        "std": sd
-                    },
-                    force_rule=ai_force_rule
-                )
-                st.chat_message("ai").write(answer)
-
-        # AI event log panel
-        log = st.session_state.setdefault("ai_log", {}).get(room, [])
-        if log:
-            st.write("---")
-            st.markdown("##### AI Event Log")
-            for e in reversed(log[-6:]):
-                st.markdown(f"- {pd.to_datetime(e['ts'], unit='s').strftime('%H:%M:%S')} — {e['text']}")
 
 
 
