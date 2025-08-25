@@ -27,21 +27,27 @@ components.html("""
 (function () {
   if (window._obwBridgeInstalled) return;
   window._obwBridgeInstalled = true;
+
+  function setQS(room, det) {
+    try {
+      const url = new URL(window.location.href);
+      if (room !== undefined && room !== null) url.searchParams.set('room', room);
+      if (det === null) url.searchParams.delete('det');
+      else if (det !== undefined) url.searchParams.set('det', det);
+      url.hash = '#room';
+      // HARD NAV to avoid chunk-loader races:
+      window.top.location.href = url.toString();
+    } catch (err) {
+      console.error('Bridge QS error', err);
+      // last-ditch reload
+      window.top.location.reload();
+    }
+  }
+
   window.addEventListener('message', (e) => {
     const d = e.data || {};
     if (d.type === 'setQS') {
-      try {
-        const url = new URL(window.location.href);
-        if (d.room !== undefined) url.searchParams.set('room', d.room);
-        if (d.det !== undefined) {
-          if (d.det === null) url.searchParams.delete('det');
-          else url.searchParams.set('det', d.det);
-        }
-        url.hash = '#room';
-        window.location.href = url.toString();
-      } catch (err) {
-        console.error('Bridge QS error', err);
-      }
+      setQS(d.room, d.det);
     }
   }, false);
 })();
