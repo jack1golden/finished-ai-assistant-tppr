@@ -181,8 +181,9 @@ def render_overview(images_dir: Path):
     for room, box in HOTSPOTS.items():
         hotspots_html.append(
             f"""
-            <a class="hotspot" data-room="{room}" href="#"
-               onclick="window.parent.postMessage({{type:'setQS', room:'{room}', det:null}}, '*'); return false;"
+            <a class="hotspot" data-room="{room}"
+               href="?room={quote(room)}" target="_top"
+               onclick="try{{window.parent.postMessage({{type:'setQS', room:'{room}', det:null}}, '*');}}catch(_){{}}"
                style="position:absolute; left:{box['left']}%; top:{box['top']}%; width:{box['width']}%; height:{box['height']}%;
                       border:2px solid rgba(34,197,94,.95); border-radius:10px;
                       background:rgba(16,185,129,.22); color:#0b1220; font-weight:800; font-size:12px;
@@ -233,14 +234,15 @@ def render_room(
     dets = DETECTORS.get(room, [])
     colL, colR = st.columns([2, 1], gap="large")
 
-    # Detector pins (absolute, inline CSS; use bridge to set det)
+    # Detector pins: real href + bridge (no return false)
     pins_html = []
     for d in dets:
         lbl = d["label"]
         pins_html.append(
             f"""
-            <a class="detector" href="#"
-               onclick="window.parent.postMessage({{type:'setQS', room:'{room}', det:'{lbl}'}}, '*'); return false;"
+            <a class="detector"
+               href="?room={quote(room)}&det={quote(lbl)}" target="_top"
+               onclick="try{{window.parent.postMessage({{type:'setQS', room:'{room}', det:'{lbl}'}}, '*');}}catch(_){{}}"
                style="position:absolute; left:{d['x']}%; top:{d['y']}%; transform:translate(-50%,-50%);
                       border:2px solid #22c55e; border-radius:10px; background:#ffffff;
                       padding:6px 10px; min-width:72px; text-align:center; z-index:30;
