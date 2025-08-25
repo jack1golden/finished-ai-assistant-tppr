@@ -1,4 +1,21 @@
-streamlit>=1.31
-pillow>=10
-numpy>=1.24
+# requirements.txt
+
+# Core framework
+streamlit==1.38.0
+
+# Charts
+altair==5.3.0
+pandas>=2.2,<3
+numpy>=2.1,<3
+
+# AI
 openai>=1.40.0
+
+# Image handling (logo / image overlay)
+Pillow==10.4.0
+
+# Optional simulator utilities
+pymodbus==3.6.8
+
+# For interactive HTML components
+streamlit-components==0.1.0
