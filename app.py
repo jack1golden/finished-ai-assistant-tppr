@@ -21,7 +21,7 @@ from utils import ai as safety_ai   # utils/ai.py
 
 st.set_page_config(page_title="OBW — Pharma Safety HMI (AI First)", layout="wide")
 
-# ---------- OBW Theme CSS ----------
+# ---------- OBW Theme ----------
 OBW_NAVY = "#0a2342"
 OBW_RED = "#d81f26"
 OBW_BLACK = "#000000"
@@ -29,32 +29,42 @@ WHITE = "#ffffff"
 
 st.markdown(f"""
 <style>
-/* Global */
-body, .block-container {{
+/* App base */
+.block-container {{
   background:{WHITE} !important;
 }}
-h1, h2, h3, h4, h5, h6, p, span, label {{
-  color: {OBW_BLACK} !important;
-}}
-/* Tabs */
+
+/* --- NAV / TAB STRIP --- */
 .stTabs [data-baseweb="tab-list"] {{
   background:{OBW_NAVY};
   padding: 6px 8px;
   border-radius: 10px;
 }}
 .stTabs [data-baseweb="tab"] {{
-  color: #ffffff !important;
+  color: #ffffff !important;     /* ✅ white text on navy */
+  font-weight: 600;
 }}
 .stTabs [data-baseweb="tab"]:hover {{
-  background: rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.08);
 }}
 .stTabs [aria-selected="true"] {{
   border-bottom: 3px solid {OBW_RED} !important;
 }}
+
+/* Section headers that sit on navy bars (Room header chip etc) */
+.obw-bar {{
+  background:{OBW_NAVY};
+  color:#ffffff;                 /* ✅ white */
+  padding:8px 12px;
+  border-radius:10px;
+  display:inline-block;
+  font-weight:700;
+}}
+
 /* Buttons */
 .stButton > button {{
   background: {OBW_NAVY};
-  color:#ffffff;
+  color:#ffffff;                 /* ✅ white */
   border: 1px solid {OBW_NAVY};
   border-radius: 8px;
 }}
@@ -62,31 +72,41 @@ h1, h2, h3, h4, h5, h6, p, span, label {{
   background: {OBW_RED};
   border-color: {OBW_RED};
 }}
+
 /* Chips on overview */
 .chip {{
   display:inline-block; color:#0b1220; font-weight:800; padding:6px 10px;
   border-radius:999px; box-shadow:0 1px 6px rgba(0,0,0,.2);
 }}
-/* Hotspots */
+
+/* Overview hotspots (room buttons) */
 .hotspot {{
-  position:absolute; border:2px solid rgba(34,197,94,.9); border-radius:10px;
-  background:rgba(16,185,129,.18); color:#0b1220; font-weight:800; font-size:12px;
+  position:absolute; border:2px solid rgba(34,197,94,.95); border-radius:10px;
+  background:rgba(16,185,129,.22); color:#0b1220; font-weight:800; font-size:12px;
   display:flex; align-items:flex-start; justify-content:flex-start; padding:4px 6px; z-index:20;
   text-decoration:none;
 }}
-.hotspot:hover {{ background:rgba(16,185,129,.28); }}
+.hotspot:hover {{ background:rgba(16,185,129,.32); }}
 .hotspot span {{
   background:rgba(2,6,23,.06); border:1px solid rgba(10,35,66,.25); padding:2px 6px; border-radius:8px;
 }}
+
 /* Detector badges in room */
 .detector {{
   position:absolute; transform:translate(-50%,-50%);
-  border:2px solid #22c55e; border-radius:10px; background:#fff;
-  padding:6px 10px; min-width:72px; text-align:center; z-index:20;
+  border:2px solid #22c55e; border-radius:10px; background:#ffffff;
+  padding:6px 10px; min-width:72px; text-align:center; z-index:30; /* ✅ on top */
   box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
 }}
 .detector:hover {{ background:#eaffea; }}
 .detector .lbl {{ font-size:14px; line-height:1.1; }}
+
+/* Small navy label bars */
+.obw-smallbar {{
+  background:{OBW_NAVY};
+  color:#ffffff;                 /* ✅ white */
+  padding:4px 8px; border-radius:8px; display:inline-block; font-weight:700;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -128,17 +148,17 @@ def _sanitize_selected_detector():
 _sanitize_selected_detector()
 
 # ---------- header (logo) ----------
-colh1, colh2 = st.columns([6, 1])
-with colh1:
+c1, c2 = st.columns([6, 1])
+with c1:
     st.title("OBW — Pharma Safety HMI (AI‑First)")
-with colh2:
+with c2:
     logo_path = IMAGES / "logo.png"
     if logo_path.exists():
         st.image(str(logo_path), use_container_width=True)
     else:
-        # Inline SVG fallback: OBW (black) + red curve + "Technologies" in red
+        # SVG fallback: black OBW + red curve + "Technologies" red
         st.markdown(f"""
-        <div style="display:flex;align-items:center;justify-content:center;">
+        <div style="display:flex;align-items:center;justify-content:center; background:#fff;">
           <svg width="180" height="60" viewBox="0 0 300 100" xmlns="http://www.w3.org/2000/svg">
             <text x="8" y="55" font-size="48" font-family="Arial, Helvetica, sans-serif" fill="{OBW_BLACK}" font-weight="700">OBW</text>
             <path d="M5 20 C 80 0, 180 0, 260 20" stroke="{OBW_RED}" stroke-width="6" fill="none"/>
@@ -154,8 +174,8 @@ tab_overview, tab_room, tab_ai, tab_logs, tab_settings = st.tabs(
 
 # ---------- Overview tab ----------
 with tab_overview:
-    st.subheader("🏭 Facility Overview (2.5D) — OBW Theme")
-    facility.render_overview(IMAGES)
+    st.markdown(f'<div class="obw-bar">🏭 Facility Overview (2.5D) — OBW Theme</div>', unsafe_allow_html=True)
+    facility.render_overview(IMAGES)  # ✅ clickable hotspots restored
 
     st.markdown("#### Quick open")
     bcols = st.columns(6)
@@ -196,7 +216,7 @@ with tab_room:
 
     # Operator console
     st.write("---")
-    st.markdown("### 🎛 Operator Console")
+    st.markdown('<div class="obw-smallbar">🎛 Operator Console</div>', unsafe_allow_html=True)
     oc1, oc2, oc3, oc4, oc5 = st.columns(5)
     room = st.session_state["current_room"]
     if room and room != "Overview":
@@ -224,16 +244,15 @@ with tab_room:
             ops=st.session_state["room_ops"].get(room, {}),
             brand={"navy": OBW_NAVY, "red": OBW_RED}
         )
-        # Reset one-shot ops so the next render doesn't repeat
+        # Reset one-shot ops
         st.session_state["room_ops"][room] = {}
 
 # ---------- AI Assistant tab (global) ----------
 with tab_ai:
-    st.subheader("🤖 Global AI Assistant")
+    st.markdown('<div class="obw-bar">🤖 Global AI Assistant</div>', unsafe_allow_html=True)
     st.caption("Ask about the entire facility — trends, cross-room reasoning, best actions. Uses GPT if available; otherwise the rule-based brain.")
     if p := st.chat_input("Ask a facility-wide question…", key="chat_global"):
         st.chat_message("user").write(p)
-        # Build a compact snapshot of facility state
         snapshot = facility.build_facility_snapshot()
         answer = safety_ai.ask_ai(
             p,
@@ -244,7 +263,7 @@ with tab_ai:
 
 # ---------- Logs & Reports tab ----------
 with tab_logs:
-    st.subheader("📜 AI Event Log")
+    st.markdown('<div class="obw-bar">📜 AI Event Log</div>', unsafe_allow_html=True)
     logs = st.session_state.get("ai_log", {})
     if not logs:
         st.info("No events yet. Trigger a spike or let AI auto-comment when status changes.")
@@ -256,15 +275,13 @@ with tab_logs:
             for e in reversed(entries[-12:]):
                 st.markdown(f"- **{facility.ts_str(e['ts'])}** — {e['text']}")
             st.write("---")
-
-    # Simple export of the log as a branded HTML file
     if st.button("⬇️ Export Incident Log (HTML)"):
         html = facility.export_incident_html(logs, brand={"navy": OBW_NAVY, "red": OBW_RED})
         st.download_button("Download HTML", data=html, file_name="OBW_Incident_Log.html", mime="text/html")
 
 # ---------- Settings tab ----------
 with tab_settings:
-    st.subheader("⚙️ Settings")
+    st.markdown('<div class="obw-bar">⚙️ Settings</div>', unsafe_allow_html=True)
     st.markdown("**AI Mode**")
     available = safety_ai.is_available()
     st.caption(f"Backend detected: **{'OpenAI (available)' if available else 'Rule-based only'}**")
@@ -283,12 +300,12 @@ with tab_settings:
         st.write(answer)
 
     st.write("---")
-    st.markdown("**Brand preview**")
     st.markdown(f"""
     <div style="border:1px solid {OBW_NAVY}; padding:8px; border-radius:10px;">
-      <div style="background:{OBW_NAVY}; color:#fff; padding:6px 10px; border-radius:8px; display:inline-block;">Navy tab example</div>
+      <div style="background:{OBW_NAVY}; color:#fff; padding:6px 10px; border-radius:8px; display:inline-block;">Navy bar (white text)</div>
       <div style="margin-top:6px; height:4px; background:{OBW_RED}; width:120px;"></div>
     </div>
     """, unsafe_allow_html=True)
+
 
 
