@@ -20,6 +20,14 @@ def _img64(path: Path) -> str:
 def _exists(p: Path) -> bool:
     return p.exists() and p.is_file()
 
+# Allow app to ask for detectors
+def get_detectors_for(room: str):
+    return DETECTORS.get(room, [])
+
+# Tiny JS auto-refresh injector (works on Streamlit Cloud)
+def inject_autorefresh_ms(ms: int = 1500):
+    components.html(f"<script>setTimeout(()=>window.parent.location.reload(), {int(ms)});</script>", height=0)
+
 # ---------- file candidates ----------
 OVERVIEW_CANDS = ["Overview.png", "Overview (1).png", "overview.png"]
 ROOM_FILES = {
@@ -48,11 +56,11 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,  width=23, height=21),
 }
 
-# ---------- detectors (final positions incl your last tweaks) ----------
+# ---------- detectors (final positions incl your last tweak: Room 2 CO x=85,y=62) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
-    "Room 2": [dict(label="CO", x=85, y=62, units="ppm")],  # your final
-    "Room 3": [dict(label="O₂", x=5, y=44, units="%")],
+    "Room 2": [dict(label="CO", x=85, y=62, units="ppm")],
+    "Room 3": [dict(label="O₂", x=5,  y=44, units="%")],
     "Room 12 17": [dict(label="Ethanol", x=63, y=15, units="ppm")],
     "Room Production": [
         dict(label="NH₃", x=20, y=28, units="ppm"),
@@ -63,9 +71,6 @@ DETECTORS = {
         dict(label="H₂S", x=15, y=29, units="ppm"),
     ],
 }
-
-def get_detectors_for(room: str):
-    return DETECTORS.get(room, [])
 
 # ---------- thresholds & color map ----------
 THRESHOLDS = {
@@ -365,6 +370,7 @@ def render_ai_chat():
             "Recommendation: close shutters in all affected rooms; increase extraction in Production areas; "
             "verify detector calibrations and evacuate if O₂ < 19.5%."
         )
+
 
 
 
