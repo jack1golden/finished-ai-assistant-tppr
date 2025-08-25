@@ -1,11 +1,11 @@
 # app.py
 from __future__ import annotations
-
 import sys
 from pathlib import Path
 from urllib.parse import unquote
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ---------- paths / imports ----------
 HERE = Path(__file__).parent.resolve()
@@ -21,6 +21,33 @@ from utils import ai as safety_ai   # utils/ai.py
 
 st.set_page_config(page_title="OBW — Pharma Safety HMI (AI First)", layout="wide")
 
+# ---------- Bridge: let iframes set room/det cleanly ----------
+components.html("""
+<script>
+(function () {
+  if (window._obwBridgeInstalled) return;
+  window._obwBridgeInstalled = true;
+  window.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type === 'setQS') {
+      try {
+        const url = new URL(window.location.href);
+        if (d.room !== undefined) url.searchParams.set('room', d.room);
+        if (d.det !== undefined) {
+          if (d.det === null) url.searchParams.delete('det');
+          else url.searchParams.set('det', d.det);
+        }
+        url.hash = '#room';
+        window.location.href = url.toString();
+      } catch (err) {
+        console.error('Bridge QS error', err);
+      }
+    }
+  }, false);
+})();
+</script>
+""", height=0)
+
 # ---------- OBW Theme ----------
 OBW_NAVY = "#0a2342"
 OBW_RED = "#d81f26"
@@ -29,84 +56,16 @@ WHITE = "#ffffff"
 
 st.markdown(f"""
 <style>
-/* App base */
-.block-container {{
-  background:{WHITE} !important;
-}}
+.block-container {{ background:{WHITE} !important; }}
+.stTabs [data-baseweb="tab-list"] {{ background:{OBW_NAVY}; padding: 6px 8px; border-radius: 10px; }}
+.stTabs [data-baseweb="tab"] {{ color: #ffffff !important; font-weight: 600; }}
+.stTabs [data-baseweb="tab"]:hover {{ background: rgba(255,255,255,0.08); }}
+.stTabs [aria-selected="true"] {{ border-bottom: 3px solid {OBW_RED} !important; }}
 
-/* --- NAV / TAB STRIP --- */
-.stTabs [data-baseweb="tab-list"] {{
-  background:{OBW_NAVY};
-  padding: 6px 8px;
-  border-radius: 10px;
-}}
-.stTabs [data-baseweb="tab"] {{
-  color: #ffffff !important;     /* ✅ white text on navy */
-  font-weight: 600;
-}}
-.stTabs [data-baseweb="tab"]:hover {{
-  background: rgba(255,255,255,0.08);
-}}
-.stTabs [aria-selected="true"] {{
-  border-bottom: 3px solid {OBW_RED} !important;
-}}
-
-/* Section headers that sit on navy bars (Room header chip etc) */
-.obw-bar {{
-  background:{OBW_NAVY};
-  color:#ffffff;                 /* ✅ white */
-  padding:8px 12px;
-  border-radius:10px;
-  display:inline-block;
-  font-weight:700;
-}}
-
-/* Buttons */
-.stButton > button {{
-  background: {OBW_NAVY};
-  color:#ffffff;                 /* ✅ white */
-  border: 1px solid {OBW_NAVY};
-  border-radius: 8px;
-}}
-.stButton > button:hover {{
-  background: {OBW_RED};
-  border-color: {OBW_RED};
-}}
-
-/* Chips on overview */
-.chip {{
-  display:inline-block; color:#0b1220; font-weight:800; padding:6px 10px;
-  border-radius:999px; box-shadow:0 1px 6px rgba(0,0,0,.2);
-}}
-
-/* Overview hotspots (room buttons) */
-.hotspot {{
-  position:absolute; border:2px solid rgba(34,197,94,.95); border-radius:10px;
-  background:rgba(16,185,129,.22); color:#0b1220; font-weight:800; font-size:12px;
-  display:flex; align-items:flex-start; justify-content:flex-start; padding:4px 6px; z-index:20;
-  text-decoration:none;
-}}
-.hotspot:hover {{ background:rgba(16,185,129,.32); }}
-.hotspot span {{
-  background:rgba(2,6,23,.06); border:1px solid rgba(10,35,66,.25); padding:2px 6px; border-radius:8px;
-}}
-
-/* Detector badges in room */
-.detector {{
-  position:absolute; transform:translate(-50%,-50%);
-  border:2px solid #22c55e; border-radius:10px; background:#ffffff;
-  padding:6px 10px; min-width:72px; text-align:center; z-index:30; /* ✅ on top */
-  box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
-}}
-.detector:hover {{ background:#eaffea; }}
-.detector .lbl {{ font-size:14px; line-height:1.1; }}
-
-/* Small navy label bars */
-.obw-smallbar {{
-  background:{OBW_NAVY};
-  color:#ffffff;                 /* ✅ white */
-  padding:4px 8px; border-radius:8px; display:inline-block; font-weight:700;
-}}
+.obw-bar {{ background:{OBW_NAVY}; color:#ffffff; padding:8px 12px; border-radius:10px; display:inline-block; font-weight:700; }}
+.stButton > button {{ background: {OBW_NAVY}; color:#ffffff; border: 1px solid {OBW_NAVY}; border-radius: 8px; }}
+.stButton > button:hover {{ background: {OBW_RED}; border-color: {OBW_RED}; }}
+.obw-smallbar {{ background:{OBW_NAVY}; color:#ffffff; padding:4px 8px; border-radius:8px; display:inline-block; font-weight:700; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -119,7 +78,7 @@ _d("current_room", "Overview")
 _d("selected_detector", None)
 _d("simulate_by_room", {})   # {room: bool}
 _d("force_rule_ai", False)   # force rule-based even if key exists
-_d("room_ops", {})           # per-room operator actions: {'close_shutter':bool, 'ventilate':bool, 'reset':bool, 'ack':bool}
+_d("room_ops", {})           # per-room operator actions
 
 # ---------- query params → session sync ----------
 qp = st.query_params
@@ -156,7 +115,6 @@ with c2:
     if logo_path.exists():
         st.image(str(logo_path), use_container_width=True)
     else:
-        # SVG fallback: black OBW + red curve + "Technologies" red
         st.markdown(f"""
         <div style="display:flex;align-items:center;justify-content:center; background:#fff;">
           <svg width="180" height="60" viewBox="0 0 300 100" xmlns="http://www.w3.org/2000/svg">
@@ -175,7 +133,7 @@ tab_overview, tab_room, tab_ai, tab_logs, tab_settings = st.tabs(
 # ---------- Overview tab ----------
 with tab_overview:
     st.markdown(f'<div class="obw-bar">🏭 Facility Overview (2.5D) — OBW Theme</div>', unsafe_allow_html=True)
-    facility.render_overview(IMAGES)  # ✅ clickable hotspots restored
+    facility.render_overview(IMAGES)
 
     st.markdown("#### Quick open")
     bcols = st.columns(6)
@@ -189,7 +147,6 @@ with tab_overview:
 
 # ---------- Room tab ----------
 with tab_room:
-    # Room selector & detector selector row
     csel1, csel2 = st.columns([2, 2])
     rooms = ["Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
     with csel1:
@@ -214,7 +171,6 @@ with tab_room:
         else:
             st.info("No detectors configured for this room.")
 
-    # Operator console
     st.write("---")
     st.markdown('<div class="obw-smallbar">🎛 Operator Console</div>', unsafe_allow_html=True)
     oc1, oc2, oc3, oc4, oc5 = st.columns(5)
@@ -232,7 +188,6 @@ with tab_room:
             st.session_state["room_ops"].setdefault(room, {})["reset"] = True
 
     st.write("---")
-    # Render room (image, badges, cloud/shutter, timeline, predictive chart, AI)
     if room and room != "Overview":
         simulate_flag = st.session_state["simulate_by_room"].get(room, False)
         facility.render_room(
@@ -244,13 +199,12 @@ with tab_room:
             ops=st.session_state["room_ops"].get(room, {}),
             brand={"navy": OBW_NAVY, "red": OBW_RED}
         )
-        # Reset one-shot ops
         st.session_state["room_ops"][room] = {}
 
 # ---------- AI Assistant tab (global) ----------
 with tab_ai:
     st.markdown('<div class="obw-bar">🤖 Global AI Assistant</div>', unsafe_allow_html=True)
-    st.caption("Ask about the entire facility — trends, cross-room reasoning, best actions. Uses GPT if available; otherwise the rule-based brain.")
+    st.caption("Ask about the entire facility — trends, cross-room reasoning, best actions. Uses GPT if available; otherwise rule-based.")
     if p := st.chat_input("Ask a facility-wide question…", key="chat_global"):
         st.chat_message("user").write(p)
         snapshot = facility.build_facility_snapshot()
