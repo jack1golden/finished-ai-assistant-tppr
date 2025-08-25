@@ -16,7 +16,7 @@ UTILS_DIR = HERE / "utils"
 if str(UTILS_DIR) not in sys.path:
     sys.path.insert(0, str(UTILS_DIR))
 
-from utils import facility  # keep file name: utils/facility.py
+from utils import facility  # utils/facility.py
 
 st.set_page_config(page_title="Pharma Safety HMI — AI First", layout="wide")
 
@@ -38,13 +38,15 @@ if "room" in qp and qp["room"]:
     st.session_state["nav"] = room_val
 if "det" in qp and qp["det"]:
     st.session_state["selected_detector"] = unquote(qp["det"])
-
-# allow ?nav=Room%201 as well (extra robustness)
 if "nav" in qp and qp["nav"]:
     st.session_state["nav"] = unquote(qp["nav"])
     if st.session_state["nav"] == "Overview":
         st.session_state["current_room"] = None
         st.session_state["selected_detector"] = None
+
+ROOM_TABS = {"Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"}
+if st.session_state["nav"] in ROOM_TABS and st.session_state.get("current_room") != st.session_state["nav"]:
+    st.session_state["current_room"] = st.session_state["nav"]
 
 # ---------- header: tabs + logo ----------
 cols = st.columns([5, 1])
@@ -76,7 +78,7 @@ with tabs[0]:
     if active == "Overview":
         st.title("🏭 Facility Overview (2.5D)")
         facility.render_overview(IMAGES)
-        st.markdown("#### Quick open (backup)")
+        st.markdown("#### Quick open")
         bcols = st.columns(6)
         labels = ["Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
         for i, rn in enumerate(labels):
@@ -88,6 +90,7 @@ with tabs[0]:
 def _room_tab(tab_container, room_name: str, sim_key: str):
     with tab_container:
         if active == room_name:
+            st.session_state["current_room"] = room_name
             st.title(f"🚪 {room_name}")
             c1, c2, c3 = st.columns([1, 1, 2])
             if c1.button("💨 Simulate Gas Leak", key=f"sim_{sim_key}"):
