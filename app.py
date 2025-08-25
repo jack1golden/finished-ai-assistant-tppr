@@ -72,6 +72,22 @@ with st.sidebar:
         st.session_state["current_room"] = sel
         if prev_room != sel:
             st.session_state["selected_detector"] = None
+        # sanitize against this room
+        def _sanitize_selected_detector():
+            room = st.session_state.get("current_room")
+            if not room or room == "Overview":
+                st.session_state["selected_detector"] = None
+                return
+            dets = facility.get_detectors_for(room) or []
+            labels = [d["label"] for d in dets]
+            cur = st.session_state.get("selected_detector")
+            if not labels:
+                st.session_state["selected_detector"] = None
+                st.query_params.update({"room": room})
+                return
+            if cur not in labels:
+                st.session_state["selected_detector"] = labels[0]
+                st.query_params.update({"room": room, "det": labels[0]})
         _sanitize_selected_detector()
 
     # detector chooser (safe)
@@ -84,12 +100,7 @@ with st.sidebar:
             if current not in labels:
                 current = labels[0]
                 st.session_state["selected_detector"] = current
-            chosen = st.radio(
-                "Detector",
-                labels,
-                index=labels.index(current),
-                key=f"rad_{room}",
-            )
+            chosen = st.radio("Detector", labels, index=labels.index(current), key=f"rad_{room}")
             if chosen != st.session_state.get("selected_detector"):
                 st.session_state["selected_detector"] = chosen
             st.query_params.update({"room": room, "det": st.session_state["selected_detector"]})
@@ -110,9 +121,22 @@ with st.sidebar:
     st.caption(f"Backend detected: **{'OpenAI (available)' if available else 'Rule-based only'}**")
     st.session_state["force_rule_ai"] = st.toggle(
         "Force rule‑based (no API calls)",
-        value=st.session_state["force_rule_ai"],
+        value=st.session_state.get("force_rule_ai", False),
         help="Leave off to use OpenAI when available."
     )
+
+    # 🔎 Self-test (never prints your key)
+    if st.button("Run AI self-test"):
+        # Tiny context for the check
+        ctx = {"room": "Room 1", "gas": "NH₃", "value": 30.0, "status": "WARN",
+               "thresholds": {"mode":"high","warn":25,"alarm":35,"units":"ppm"},
+               "simulate": False, "recent_series":[28,29,30]}
+        # Force GPT if available and not explicitly forced off
+        answer = safety_ai.ask_ai("Write a haiku about an H₂S alarm.", ctx,
+                                  force_rule=st.session_state["force_rule_ai"])
+        st.write("**Backend:**", safety_ai.backend_name(st.session_state["force_rule_ai"]))
+        st.write(answer)
+
 
 # ---------- header ----------
 cols = st.columns([5, 1])
