@@ -29,14 +29,35 @@ _d("current_room", None)
 _d("selected_detector", None)
 _d("simulate_by_room", {})  # {room: bool}
 
-# ---------- query params → session sync ----------
+# ---------- parse query params -> session ----------
 qp = st.query_params
 if "room" in qp and qp["room"]:
     st.session_state["current_room"] = unquote(qp["room"])
 if "det" in qp and qp["det"]:
     st.session_state["selected_detector"] = unquote(qp["det"])
 
-# ---------- sidebar: robust navigation fallback ----------
+# ---------- sanitize detector vs room ----------
+def _sanitize_selected_detector():
+    room = st.session_state.get("current_room")
+    if not room or room == "Overview":
+        st.session_state["selected_detector"] = None
+        return
+    dets = facility.get_detectors_for(room) or []
+    labels = [d["label"] for d in dets]
+    cur = st.session_state.get("selected_detector")
+    if not labels:
+        st.session_state["selected_detector"] = None
+        # also strip det from URL if present
+        st.query_params.update({"room": room})
+        return
+    if cur not in labels:
+        # default to first detector in that room
+        st.session_state["selected_detector"] = labels[0]
+        st.query_params.update({"room": room, "det": labels[0]})
+
+_sanitize_selected_detector()
+
+# ---------- sidebar: robust navigation ----------
 with st.sidebar:
     st.markdown("### Navigation")
     rooms = ["Overview", "Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]
@@ -47,25 +68,42 @@ with st.sidebar:
         st.session_state["selected_detector"] = None
         st.query_params.clear()
     else:
+        # if changing rooms, clear incompatible detector
+        prev_room = st.session_state.get("current_room")
         st.session_state["current_room"] = sel
-        st.query_params.update({"room": sel, **({"det": st.session_state["selected_detector"]} if st.session_state["selected_detector"] else {})})
+        if prev_room != sel:
+            st.session_state["selected_detector"] = None
+        _sanitize_selected_detector()  # ensure we have a valid detector for this room
 
-    if st.session_state["current_room"] and st.session_state["current_room"] != "Overview":
-        det_list = facility.get_detectors_for(st.session_state["current_room"])
-        if det_list:
-            labels = [d["label"] for d in det_list]
-            current = st.session_state.get("selected_detector") or labels[0]
-            chosen = st.radio("Detector", labels, index=labels.index(current))
+    # detector chooser (safe)
+    room = st.session_state.get("current_room")
+    if room and room != "Overview":
+        det_list = facility.get_detectors_for(room) or []
+        labels = [d["label"] for d in det_list]
+        current = st.session_state.get("selected_detector")
+        if labels:
+            if current not in labels:
+                current = labels[0]
+                st.session_state["selected_detector"] = current
+            chosen = st.radio(
+                "Detector",
+                labels,
+                index=labels.index(current),
+                key=f"rad_{room}",
+            )
             if chosen != st.session_state.get("selected_detector"):
                 st.session_state["selected_detector"] = chosen
-                st.query_params.update({"room": st.session_state["current_room"], "det": chosen})
+            st.query_params.update({"room": room, "det": st.session_state["selected_detector"]})
+        else:
+            st.caption("No detectors defined for this room.")
+            st.query_params.update({"room": room})
 
         st.write("---")
         c1, c2 = st.columns(2)
-        if c1.button("💨 Simulate", use_container_width=True):
-            st.session_state["simulate_by_room"][st.session_state["current_room"]] = True
-        if c2.button("⏹ Reset", use_container_width=True):
-            st.session_state["simulate_by_room"][st.session_state["current_room"]] = False
+        if c1.button("💨 Simulate", use_container_width=True, key=f"sim_{room}"):
+            st.session_state["simulate_by_room"][room] = True
+        if c2.button("⏹ Reset", use_container_width=True, key=f"reset_{room}"):
+            st.session_state["simulate_by_room"][room] = False
 
 # ---------- header ----------
 cols = st.columns([5, 1])
@@ -76,7 +114,7 @@ with cols[1]:
     if logo.exists():
         st.image(str(logo), caption="", use_container_width=True)
 
-# ---------- main area ----------
+# ---------- main ----------
 room = st.session_state["current_room"]
 
 if not room:
@@ -87,8 +125,10 @@ if not room:
     for i, rn in enumerate(["Room 1", "Room 2", "Room 3", "Room Production", "Room Production 2", "Room 12 17"]):
         if bcols[i].button(rn, key=f"open_{rn}"):
             st.session_state["current_room"] = rn
-            st.query_params.update({"room": rn})
-            st.rerun()  # navigate immediately
+            st.session_state["selected_detector"] = None
+            _sanitize_selected_detector()
+            st.query_params.update({"room": rn, **({"det": st.session_state["selected_detector"]} if st.session_state["selected_detector"] else {})})
+            st.rerun()
 else:
     st.subheader(f"🚪 {room}")
     simulate_flag = st.session_state["simulate_by_room"].get(room, False)
