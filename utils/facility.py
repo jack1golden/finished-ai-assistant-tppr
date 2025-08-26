@@ -4,7 +4,6 @@ import base64, time
 from pathlib import Path
 from urllib.parse import quote
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -16,17 +15,13 @@ from . import history
 def _b64(path: Path) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
-
 def _img64(path: Path) -> str:
     ext = path.suffix.lstrip(".").lower()
     return f"data:image/{ext};base64,{_b64(path)}"
-
 def _exists(p: Path) -> bool:
     return p.exists() and p.is_file()
-
 def ts_str(ts: int) -> str:
     return pd.to_datetime(ts, unit="s").strftime("%Y-%m-%d %H:%M:%S")
-
 def get_detectors_for(room: str):
     return DETECTORS.get(room, [])
 
@@ -43,11 +38,10 @@ ROOM_FILES = {
 def _find(images_dir: Path, cand: list[str]) -> Path | None:
     for n in cand:
         p = images_dir / n
-        if _exists(p):
-            return p
+        if _exists(p): return p
     return None
 
-# ---------- overview hotspots (visual only) ----------
+# ---------- hotspots (visual only) ----------
 HOTSPOTS = {
     "Room 1":            dict(left=63, top=2,   width=14, height=16),
     "Room 2":            dict(left=67, top=43,  width=14, height=16),
@@ -57,7 +51,7 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,   width=23, height=21),
 }
 
-# ---------- detector coordinates (final from your mapping) ----------
+# ---------- detector coords (your final) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO",  x=85, y=62, units="ppm")],
@@ -85,15 +79,12 @@ GAS_COLORS = {
     "NH₃": "#8b5cf6", "CO": "#ef4444", "O₂": "#60a5fa", "H₂S": "#eab308", "Ethanol": "#fb923c",
 }
 
-# ======================================================
-# Overview image (hotspots preserved for look; navigation via buttons in app.py)
-# ======================================================
+# ===== Overview (visual only) =====
 def render_overview_image_only(images_dir: Path):
     ov = _find(images_dir, OVERVIEW_CANDS)
     if not ov:
         st.error("Overview image not found in /images.")
         return
-
     boxes = []
     for room, box in HOTSPOTS.items():
         boxes.append(f"""
@@ -102,7 +93,6 @@ def render_overview_image_only(images_dir: Path):
             <span>{room}</span>
           </a>""")
     buttons_html = "\n".join(boxes)
-
     html = f"""
     <div id="wrap" style="position:relative; width:min(1280px, 96%); margin:6px auto;
                           border:2px solid #0a2342; border-radius:12px; overflow:hidden;
@@ -121,34 +111,25 @@ def render_overview_image_only(images_dir: Path):
       </style>
       <img src="{_img64(ov)}" alt="Facility Overview" style="display:block; width:100%; height:auto;" />
       {buttons_html}
-    </div>
-    """
+    </div>"""
     components.html(html, height=820, scrolling=False)
 
-# ======================================================
-# Room: visual + data panel
-# (app.py calls image_only + data_panel; keeping logic separated/clean)
-# ======================================================
+# ===== Room (visual only) =====
 def render_room_image_only(images_dir: Path, room: str,
                            simulate: bool = False,
                            selected_detector: str | None = None,
                            ops: dict | None = None):
-    room_img = _find(images_dir, ROOM_FILES.get(room, []))
-    if not room_img:
+    img = _find(images_dir, ROOM_FILES.get(room, []))
+    if not img:
         st.error(f"No image found for {room} in /images.")
         return
-
     dets = DETECTORS.get(room, [])
     pins = []
     for d in dets:
-        lbl = d["label"]
         pins.append(f"""
-          <a class="det-btn" href="?room={quote(room)}&det={quote(lbl)}" target="_top"
-             style="left:{d['x']}%; top:{d['y']}%;">{lbl}</a>
+          <div class="det-pin" style="left:{d['x']}%; top:{d['y']}%;">{d['label']}</div>
         """)
     pins_html = "\n".join(pins)
-
-    # choose cloud color by selected detector (fallback first detector if none)
     chosen = selected_detector or (dets[0]["label"] if dets else "CO")
     cloud_color = GAS_COLORS.get(chosen, "#38bdf8")
     auto_cloud = "true" if simulate else "false"
@@ -162,15 +143,14 @@ def render_room_image_only(images_dir: Path, room: str,
                               border:2px solid #0a2342; border-radius:12px; overflow:hidden;
                               box-shadow:0 18px 60px rgba(0,0,0,.12);">
       <style>
-        .det-btn {{
+        .det-pin {{
           position:absolute; transform:translate(-50%,-50%);
           border:2px solid #22c55e; border-radius:10px; background:#ffffff;
           padding:6px 10px; min-width:72px; text-align:center; z-index:30;
-          box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
+          box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a;
         }}
-        .det-btn:hover {{ background:#eaffea; }}
       </style>
-      <img id="roomimg" src="{_img64(room_img)}" alt="{room}" style="display:block; width:100%; height:auto;" />
+      <img id="roomimg" src="{_img64(img)}" alt="{room}" style="display:block; width:100%; height:auto;" />
       <canvas id="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
       <div id="shutter" style="position:absolute; right:0; top:0; width:26px; height:100%;
           background:rgba(15,23,42,.55); transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
@@ -208,8 +188,7 @@ def render_room_image_only(images_dir: Path, room: str,
         function startCloud(){{ if(raf) cancelAnimationFrame(raf); t0=null; raf=requestAnimationFrame(drawCloud); }}
         function clearCloud(){{ if(raf) cancelAnimationFrame(raf); ctx.clearRect(0,0,canvas.width,canvas.height); }}
         function closeShutter(){{ sh.style.transform='translateX(0%)'; setTimeout(()=>{{ sh.style.transform='translateX(110%)'; }}, 6000); }}
-        const autoCloud={auto_cloud};
-        if(autoCloud) startCloud();
+        if ({auto_cloud}) startCloud();
         if ({do_close}) closeShutter();
         if ({do_vent} || {do_reset}) clearCloud();
       }})();
@@ -217,18 +196,17 @@ def render_room_image_only(images_dir: Path, room: str,
     """
     components.html(html, height=720, scrolling=False)
 
+# ===== Data panel & Live chart =====
 def render_room_data_panel(images_dir: Path, room: str, selected_detector: str,
                            simulate: bool = False, ops: dict | None = None,
                            brand: dict | None = None):
-    """Left: chart. Right: status + quick hints."""
-    colL, colR = st.columns([2, 1], gap="large")
-
+    colL, colR = st.columns([2,1], gap="large")
     with colL:
-        st.subheader(f"📈 {room} — {selected_detector} Trend")
+        st.subheader(f"📈 {room} — {selected_detector}")
         period = st.radio("Range", ["Last 1 h","Today","7 days","60 days","6 months"],
                           horizontal=True, key=f"rng_{room}_{selected_detector}")
         now = int(time.time())
-        if period == "Last 1 h":  start = now - 60*60
+        if period == "Last 1 h":  start = now - 3600
         elif period == "Today":   start = int(pd.Timestamp("today").replace(hour=0, minute=0, second=0).timestamp())
         elif period == "7 days":  start = now - 7*24*3600
         elif period == "60 days": start = now - 60*24*3600
@@ -236,68 +214,15 @@ def render_room_data_panel(images_dir: Path, room: str, selected_detector: str,
 
         df = history.fetch_series(room, selected_detector, start, now)
         df = history.apply_runtime_ops(df, room, selected_detector, simulate=simulate, ops=ops or {})
-
-        gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
+        color = GAS_COLORS.get(selected_detector, "#38bdf8")
         thr = THRESHOLDS.get(selected_detector, {})
-        chart = alt.Chart(df).mark_line(color=gas_color).encode(
+
+        base = alt.Chart(df).mark_line(color=color).encode(
             x=alt.X("t:T", title="Time"),
             y=alt.Y("value:Q", title=f"Reading ({thr.get('units','')})"),
             tooltip=[alt.Tooltip("t:T"), alt.Tooltip("value:Q", format=".2f")],
         )
-        # thresholds
-        layers = [chart]
-        if thr:
-            layers.append(alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"))
-            layers.append(alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"))
-        st.altair_chart(alt.layer(*layers), use_container_width=True)
-
-        latest = float(df["value"].iloc[-1]) if not df.empty else None
-        st.caption(f"Latest: {latest:.2f} {thr.get('units','')}" if latest is not None else "—")
-
-    with colR:
-        # very lightweight “AI-ish” guidance (rule-based here)
-        thr = THRESHOLDS.get(selected_detector, {})
-        latest = history.latest_value(room, selected_detector)
-        status = "OK"
-        msg = "Monitoring normal conditions."
-        if latest is not None and thr:
-            if thr["mode"] == "low":
-                if latest <= thr["alarm"]:
-                    status, msg = "ALARM", f"{selected_detector} critically low ({latest:.2f}{thr['units']}). Evacuate & ventilate."
-                elif latest <= thr["warn"]:
-                    status, msg = "WARN", f"{selected_detector} trending low ({latest:.2f}{thr['units']}). Investigate and prepare shutdown."
-                else:
-                    status, msg = "OK", f"{selected_detector} normal ({latest:.2f}{thr['units']})."
-            else:
-                if latest >= thr["alarm"]:
-                    status, msg = "ALARM", f"{selected_detector} high ({latest:.2f}{thr['units']}). Evacuate & isolate source."
-                elif latest >= thr["warn"]:
-                    status, msg = "WARN", f"{selected_detector} elevated ({latest:.2f}{thr['units']}). Increase ventilation; check for leaks."
-                else:
-                    status, msg = "OK", f"{selected_detector} normal ({latest:.2f}{thr['units']})."
-
-        st.subheader("Status")
-        st.write(f"**{status}** — {msg}")
-        st.caption("Simulate/ventilate/shutters controls are below/above the chart in Overview or Live Data tabs.")
-
-# ======================================================
-# Live Data helper
-# ======================================================
-def render_live_only(images_dir: Path, room: str, selected_detector: str,
-                     simulate=False, ops=None, brand=None):
-    colL, colR = st.columns([2,1], gap="large")
-    with colL:
-        st.subheader(f"📈 {room} — {selected_detector} (Live)")
-        now = int(time.time()); start = now - 3600
-        df = history.fetch_series(room, selected_detector, start, now)
-        df = history.apply_runtime_ops(df, room, selected_detector, simulate=simulate, ops=ops or {})
-        gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
-        thr = THRESHOLDS.get(selected_detector, {})
-
-        chart = alt.Chart(df).mark_line(color=gas_color).encode(
-            x="t:T", y="value:Q", tooltip=["t:T","value:Q"]
-        )
-        layers = [chart]
+        layers = [base]
         if thr:
             layers.append(alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"))
             layers.append(alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"))
@@ -307,23 +232,46 @@ def render_live_only(images_dir: Path, room: str, selected_detector: str,
         latest = history.latest_value(room, selected_detector)
         thr = THRESHOLDS.get(selected_detector, {})
         if latest is None:
-            st.write("No data.")
+            st.info("No data.")
             return
-        # quick status
         if thr.get("mode") == "low":
-            if latest <= thr["alarm"]:
-                st.write(f"**ALARM** — {selected_detector} {latest:.2f}{thr['units']} (too low)")
-            elif latest <= thr["warn"]:
-                st.write(f"**WARN** — {selected_detector} {latest:.2f}{thr['units']} (low)")
-            else:
-                st.write(f"**OK** — {selected_detector} {latest:.2f}{thr['units']}")
+            if latest <= thr["alarm"]: st.write(f"**ALARM** — {selected_detector} {latest:.2f}{thr['units']} (too low)")
+            elif latest <= thr["warn"]: st.write(f"**WARN** — {selected_detector} {latest:.2f}{thr['units']} (low)")
+            else: st.write(f"**OK** — {selected_detector} {latest:.2f}{thr['units']}")
         else:
-            if latest >= thr["alarm"]:
-                st.write(f"**ALARM** — {selected_detector} {latest:.2f}{thr['units']} (high)")
-            elif latest >= thr["warn"]:
-                st.write(f"**WARN** — {selected_detector} {latest:.2f}{thr['units']} (elevated)")
-            else:
-                st.write(f"**OK** — {selected_detector} {latest:.2f}{thr['units']}")
+            if latest >= thr["alarm"]: st.write(f"**ALARM** — {selected_detector} {latest:.2f}{thr['units']} (high)")
+            elif latest >= thr["warn"]: st.write(f"**WARN** — {selected_detector} {latest:.2f}{thr['units']} (elevated)")
+            else: st.write(f"**OK** — {selected_detector} {latest:.2f}{thr['units']}")
+
+def render_live_only(images_dir: Path, room: str, selected_detector: str,
+                     simulate=False, ops=None, brand=None):
+    colL, colR = st.columns([2,1], gap="large")
+    with colL:
+        st.subheader(f"📈 {room} — {selected_detector} (Live)")
+        now = int(time.time()); start = now - 3600
+        df = history.fetch_series(room, selected_detector, start, now)
+        df = history.apply_runtime_ops(df, room, selected_detector, simulate=simulate, ops=ops or {})
+        color = GAS_COLORS.get(selected_detector, "#38bdf8")
+        thr = THRESHOLDS.get(selected_detector, {})
+        base = alt.Chart(df).mark_line(color=color).encode(x="t:T", y="value:Q", tooltip=["t:T","value:Q"])
+        layers = [base]
+        if thr:
+            layers.append(alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"))
+            layers.append(alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"))
+        st.altair_chart(alt.layer(*layers), use_container_width=True)
+    with colR:
+        latest = history.latest_value(room, selected_detector)
+        thr = THRESHOLDS.get(selected_detector, {})
+        if latest is None: st.write("No data."); return
+        if thr.get("mode") == "low":
+            if latest <= thr["alarm"]: st.write(f"**ALARM** — {selected_detector} {latest:.2f}{thr['units']} (too low)")
+            elif latest <= thr["warn"]: st.write(f"**WARN** — {selected_detector} {latest:.2f}{thr['units']} (low)")
+            else: st.write(f"**OK** — {selected_detector} {latest:.2f}{thr['units']}")
+        else:
+            if latest >= thr["alarm"]: st.write(f"**ALARM** — {selected_detector} {latest:.2f}{thr['units']} (high)")
+            elif latest >= thr["warn"]: st.write(f"**WARN** — {selected_detector} {latest:.2f}{thr['units']} (elevated)")
+            else: st.write(f"**OK** — {selected_detector} {latest:.2f}{thr['units']}")
+
 
 
 
