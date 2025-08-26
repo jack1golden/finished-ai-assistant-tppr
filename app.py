@@ -15,8 +15,8 @@ UTILS_DIR = HERE / "utils"
 if str(UTILS_DIR) not in sys.path:
     sys.path.insert(0, str(UTILS_DIR))
 
-from utils import facility          # utils/facility.py
-from utils import ai as safety_ai   # utils/ai.py
+from utils import facility          # utils/facility.py (updated below)
+from utils import ai as safety_ai   # your existing utils/ai.py
 
 # ---------- theme ----------
 OBW_NAVY = "#0a2342"
@@ -42,7 +42,6 @@ st.markdown(f"""
     border-radius:10px; font-weight:700; width:100%;
   }}
   .stButton > button:hover {{ background:{OBW_RED}; border-color:{OBW_RED}; }}
-  .ghost-note {{ color:#6b7280; font-size:0.9rem; margin-top:.25rem; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -57,25 +56,12 @@ _sset("simulate_by_room", {})   # {room: bool}
 _sset("room_ops", {})           # {room: {...}}
 _sset("force_rule_ai", False)
 
-# ---------- read query params (from visual hotspots; non-blocking if absent) ----------
+# ---------- read query params (hotspots still set URL; we read but don't rely on them) ----------
 qp = st.query_params
 if "room" in qp and qp["room"]:
     st.session_state["current_room"] = unquote(qp["room"])
 if "det" in qp and qp["det"]:
     st.session_state["selected_detector"] = unquote(qp["det"])
-
-# ---------- sanitize detector for current room ----------
-def _sanitize_detector():
-    room = st.session_state.get("current_room")
-    if not room or room == "Overview":
-        st.session_state["selected_detector"] = None
-        return
-    labels = [d["label"] for d in facility.get_detectors_for(room)]
-    cur = st.session_state.get("selected_detector")
-    if labels and cur not in labels:
-        st.session_state["selected_detector"] = labels[0]
-
-_sanitize_detector()
 
 # ---------- header ----------
 c1, c2 = st.columns([6, 1])
@@ -86,21 +72,21 @@ with c2:
     if logo.exists():
         st.image(str(logo), use_container_width=True)
 
-# ---------- tabs ----------
-tab_overview, tab_room, tab_live, tab_ai, tab_reports, tab_settings = st.tabs(
-    ["Overview", "Room", "Live Data", "AI Assistant", "Reports", "Settings"]
+# ---------- TABS ----------
+tab_overview, tab_live, tab_ai, tab_reports, tab_settings = st.tabs(
+    ["Overview", "Live Data", "AI Assistant", "Reports", "Settings"]
 )
 
 # ======================================================
-# Overview (visual hotspots on the image + WORKING buttons underneath)
+# Overview tab
 # ======================================================
 with tab_overview:
     st.markdown('<div class="obw-bar">🏭 Facility Overview</div>', unsafe_allow_html=True)
 
-    # 1) Visual only: shows your overview image with translucent hotspot boxes (non-clickable except URL query)
+    # Visual only: overview image with hotspots (kept for look)
     facility.render_overview_image_only(IMAGES)
 
-    # 2) WORKING navigation buttons (reliable)
+    # Working navigation buttons
     st.caption("Quick navigation")
     rooms = list(facility.DETECTORS.keys())
     cols = st.columns(6)
@@ -108,62 +94,39 @@ with tab_overview:
         with cols[i % 6]:
             if st.button(room, key=f"room_btn_{room}"):
                 st.session_state["current_room"] = room
-                # default detector for that room
                 dets = facility.get_detectors_for(room)
                 st.session_state["selected_detector"] = dets[0]["label"] if dets else None
                 st.query_params.update({"room": room, "det": st.session_state["selected_detector"] or ""})
-                st.rerun()
+                # Instead of switching tabs, we render the room inline, right below:
+                st.session_state["__show_room_inline"] = True
 
-# ======================================================
-# Room (visual hotspots on the image + WORKING detector buttons underneath)
-# ======================================================
-with tab_room:
-    # Top operator strip
-    ch1, ch2, ch3, ch4 = st.columns([2,2,2,2])
-    with ch1:
-        if st.button("⬅ Back to overview"):
-            st.session_state["current_room"] = "Overview"
-            st.session_state["selected_detector"] = None
-            st.query_params.clear()
-            st.rerun()
-    with ch2:
-        if st.button("💨 Simulate leak"):
-            r = st.session_state["current_room"]
-            st.session_state["simulate_by_room"][r] = True
-    with ch3:
-        if st.button("🛑 Close shutters"):
-            r = st.session_state["current_room"]
-            st.session_state["room_ops"].setdefault(r, {})["close_shutter"] = True
-    with ch4:
-        if st.button("🌬 Ventilation"):
-            r = st.session_state["current_room"]
-            st.session_state["room_ops"].setdefault(r, {})["ventilate"] = True
+    # Inline room render (so you don't have to switch tabs)
+    if st.session_state.get("__show_room_inline") and st.session_state["current_room"] != "Overview":
+        room = st.session_state["current_room"]
+        st.markdown('<div class="obw-smallbar">🚪 Room view (inline)</div>', unsafe_allow_html=True)
 
-    room = st.session_state["current_room"]
-    if room == "Overview":
-        st.info("Pick a room from Overview.")
-    else:
-        # 1) Visual only: your room image with detector tags (hotspots)
-        facility.render_room_image_only(IMAGES, room,
-                                        simulate=st.session_state["simulate_by_room"].get(room, False),
-                                        selected_detector=st.session_state["selected_detector"],
-                                        ops=st.session_state["room_ops"].get(room, {}))
+        # 1) visual room image (hotspots kept for look)
+        facility.render_room_image_only(
+            images_dir=IMAGES,
+            room=room,
+            simulate=st.session_state["simulate_by_room"].get(room, False),
+            selected_detector=st.session_state["selected_detector"],
+            ops=st.session_state["room_ops"].get(room, {})
+        )
 
-        # 2) WORKING detector buttons underneath
+        # 2) working detector buttons
         dets = facility.get_detectors_for(room)
-        if not dets:
-            st.warning("No detectors defined for this room.")
-        else:
+        if dets:
             st.markdown('<div class="obw-smallbar">🎛 Choose detector</div>', unsafe_allow_html=True)
-            cols = st.columns(len(dets))
+            cols2 = st.columns(len(dets))
             for i, d in enumerate(dets):
-                with cols[i]:
-                    if st.button(d["label"], key=f"det_btn_{room}_{d['label']}"):
+                with cols2[i]:
+                    if st.button(d["label"], key=f"det_btn_inline_{room}_{d['label']}"):
                         st.session_state["selected_detector"] = d["label"]
                         st.query_params.update({"room": room, "det": d["label"]})
-                        st.rerun()
+                        st.session_state["__force_room_refresh"] = True
 
-        # 3) Data panel (live chart + thresholds + Honeywell + AI)
+        # 3) data panel (chart + thresholds + AI)
         if st.session_state.get("selected_detector"):
             facility.render_room_data_panel(
                 images_dir=IMAGES,
@@ -172,23 +135,25 @@ with tab_room:
                 simulate=st.session_state["simulate_by_room"].get(room, False),
                 ai_force_rule=st.session_state["force_rule_ai"],
                 ops=st.session_state["room_ops"].get(room, {}),
-                brand={"navy": OBW_NAVY, "red": OBW_RED},
+                brand={"navy": "#0a2342", "red": "#d81f26"},
             )
-            # clear one-shot ops
             st.session_state["room_ops"][room] = {}
 
 # ======================================================
-# Live Data (fallback demo path that always works)
+# Live Data tab (fallback)
 # ======================================================
 with tab_live:
     st.markdown('<div class="obw-bar">📡 Live Data</div>', unsafe_allow_html=True)
     rooms = list(facility.DETECTORS.keys())
     live_room = st.selectbox("Room", rooms,
-                             index=rooms.index(st.session_state["current_room"]) if st.session_state["current_room"] in rooms else 0)
+        index=rooms.index(st.session_state["current_room"]) if st.session_state["current_room"] in rooms else 0)
     dets = facility.get_detectors_for(live_room)
     labels = [d["label"] for d in dets]
-    live_det = st.selectbox("Detector", labels,
-                            index=labels.index(st.session_state["selected_detector"]) if st.session_state["selected_detector"] in labels else 0 if labels else None) if labels else None
+    if labels:
+        live_det = st.selectbox("Detector", labels,
+            index=labels.index(st.session_state["selected_detector"]) if st.session_state.get("selected_detector") in labels else 0)
+    else:
+        live_det = None
 
     c1, c2, c3, c4 = st.columns(4)
     if c1.button("💨 Simulate leak", key=f"live_sim_{live_room}"):
@@ -213,7 +178,7 @@ with tab_live:
         st.session_state["room_ops"][live_room] = {}
 
 # ======================================================
-# AI Assistant / Reports / Settings
+# AI / Reports / Settings
 # ======================================================
 with tab_ai:
     st.markdown('<div class="obw-bar">🤖 Global AI Assistant</div>', unsafe_allow_html=True)
@@ -237,12 +202,13 @@ with tab_reports:
 with tab_settings:
     st.markdown('<div class="obw-bar">⚙ Settings</div>', unsafe_allow_html=True)
     st.session_state["force_rule_ai"] = st.toggle("Force rule-based AI (no API calls)",
-                                                  value=st.session_state.get("force_rule_ai", False))
+        value=st.session_state.get("force_rule_ai", False))
     if st.button("Run AI self-test"):
         ans = safety_ai.ask_ai("Write a haiku about an H₂S alarm.",
-                               context={"room": "Room 1", "gas": "H₂S", "status": "ALARM"},
-                               force_rule=st.session_state["force_rule_ai"])
+            context={"room": "Room 1", "gas": "H₂S", "status": "ALARM"},
+            force_rule=st.session_state["force_rule_ai"])
         st.write(ans)
+
 
 
 
