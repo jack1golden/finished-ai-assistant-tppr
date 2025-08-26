@@ -13,7 +13,7 @@ import altair as alt
 from . import ai
 from . import history
 
-# ------------------------------ helpers
+# ---------- helpers ----------
 def _b64(path: Path) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
@@ -31,7 +31,7 @@ def ts_str(ts: int) -> str:
 def get_detectors_for(room: str):
     return DETECTORS.get(room, [])
 
-# ------------------------------ image names you provided
+# ---------- image files ----------
 OVERVIEW_CANDS = ["Overview.png", "Overview (1).png", "overview.png"]
 ROOM_FILES = {
     "Room 1": ["Room 1.png"],
@@ -41,15 +41,14 @@ ROOM_FILES = {
     "Room Production": ["Room Production.png"],
     "Room Production 2": ["Room Production 2.png"],
 }
-
-def _find(images_dir: Path, names: list[str]) -> Path | None:
-    for n in names:
+def _find(images_dir: Path, cand: list[str]) -> Path | None:
+    for n in cand:
         p = images_dir / n
         if _exists(p):
             return p
     return None
 
-# ------------------------------ overview room hotspots (your final coords)
+# ---------- overview hotspots (visual only) ----------
 HOTSPOTS = {
     "Room 1":            dict(left=63, top=2,   width=14, height=16),
     "Room 2":            dict(left=67, top=43,  width=14, height=16),
@@ -59,7 +58,7 @@ HOTSPOTS = {
     "Room Production 2": dict(left=23, top=3,   width=23, height=21),
 }
 
-# ------------------------------ detector pins (your final coords)
+# ---------- detector coordinates (final) ----------
 DETECTORS = {
     "Room 1": [dict(label="NH₃", x=35, y=35, units="ppm")],
     "Room 2": [dict(label="CO",  x=85, y=62, units="ppm")],
@@ -75,7 +74,7 @@ DETECTORS = {
     ],
 }
 
-# ------------------------------ thresholds + colors + hardware
+# ---------- thresholds & colors & hardware ----------
 THRESHOLDS = {
     "O₂":      {"mode":"low",  "warn":19.5, "alarm":18.0, "units":"%"},
     "CO":      {"mode":"high", "warn":35.0, "alarm":50.0, "units":"ppm"},
@@ -87,35 +86,34 @@ GAS_COLORS = {
     "NH₃": "#8b5cf6", "CO": "#ef4444", "O₂": "#60a5fa", "H₂S": "#eab308", "Ethanol": "#fb923c",
 }
 HONEYWELL_REC = {
-    "NH₃": "Honeywell Sensepoint XCD (NH₃) or XNX + EC‑Tox (NH₃)",
-    "CO":  "Honeywell Sensepoint XCD (CO) or XNX + EC‑Tox (CO)",
-    "O₂":  "Honeywell Sensepoint XCD (O₂) or XNX + EC‑O₂",
-    "H₂S": "Honeywell Sensepoint XCD (H₂S) or XNX + EC‑Tox (H₂S)",
+    "NH₃": "Honeywell Sensepoint XCD (NH₃) or XNX + EC-Tox (NH₃)",
+    "CO":  "Honeywell Sensepoint XCD (CO) or XNX + EC-Tox (CO)",
+    "O₂":  "Honeywell Sensepoint XCD (O₂) or XNX + EC-O₂",
+    "H₂S": "Honeywell Sensepoint XCD (H₂S) or XNX + EC-Tox (H₂S)",
     "Ethanol": "Honeywell Sensepoint XCD (VOC) or XNX + PID",
 }
 
-# ------------------------------ seed synthetic history (7 days)
+# ---------- seed 7 days of synthetic history ----------
 history.init_if_needed(DETECTORS, days=7)
 
 # ======================================================
-# Overview: image + absolute-position room buttons
+# 1) Overview IMAGE ONLY (visual hotspots preserved)
 # ======================================================
-def render_overview(images_dir: Path):
+def render_overview_image_only(images_dir: Path):
     ov = _find(images_dir, OVERVIEW_CANDS)
     if not ov:
         st.error("Overview image not found in /images.")
         return
 
-    # Compose hotspots (anchors update query params; Streamlit reads them on rerun)
-    buttons = []
+    # Visual hotspots (anchors) – keep for look; Streamlit buttons handle the logic below the image.
+    boxes = []
     for room, box in HOTSPOTS.items():
-        buttons.append(f"""
+        boxes.append(f"""
           <a class="room-btn" href="?room={quote(room)}" target="_top"
-             style="left:{box['left']}%; top:{box['top']}%;
-                    width:{box['width']}%; height:{box['height']}%;">
+             style="left:{box['left']}%; top:{box['top']}%; width:{box['width']}%; height:{box['height']}%;">
             <span>{room}</span>
           </a>""")
-    buttons_html = "\n".join(buttons)
+    buttons_html = "\n".join(boxes)
 
     html = f"""
     <div id="wrap" style="position:relative; width:min(1280px, 96%); margin:6px auto;
@@ -140,24 +138,18 @@ def render_overview(images_dir: Path):
     components.html(html, height=820, scrolling=False)
 
 # ======================================================
-# Room: image + absolute-position detector buttons + live chart & AI
+# 2) Room IMAGE ONLY (visual hotspots preserved)
 # ======================================================
-def render_room(
-    images_dir: Path,
-    room: str,
-    simulate: bool = False,
-    selected_detector: str | None = None,
-    ai_force_rule: bool = False,
-    ops: dict | None = None,
-    brand: dict | None = None,
-):
+def render_room_image_only(images_dir: Path, room: str,
+                           simulate: bool = False,
+                           selected_detector: str | None = None,
+                           ops: dict | None = None):
     room_img = _find(images_dir, ROOM_FILES.get(room, []))
     if not room_img:
         st.error(f"No image found for {room} in /images.")
         return
 
     dets = DETECTORS.get(room, [])
-    # on-image detector pins
     pins = []
     for d in dets:
         lbl = d["label"]
@@ -167,7 +159,6 @@ def render_room(
         """)
     pins_html = "\n".join(pins)
 
-    # shutter + gas cloud (visual)
     auto_cloud = "true" if simulate else "false"
     cloud_color = GAS_COLORS.get(selected_detector or (dets[0]["label"] if dets else "CO"), "#38bdf8")
     ops = ops or {}
@@ -175,99 +166,89 @@ def render_room(
     do_vent = "true" if ops.get("ventilate") else "false"
     do_reset = "true" if ops.get("reset") else "false"
 
+    html = f"""
+    <div id="roomwrap" style="position:relative; width:100%; max-width:1200px; margin:6px 0;
+                              border:2px solid #0a2342; border-radius:12px; overflow:hidden;
+                              box-shadow:0 18px 60px rgba(0,0,0,.12);">
+      <style>
+        .det-btn {{
+          position:absolute; transform:translate(-50%,-50%);
+          border:2px solid #22c55e; border-radius:10px; background:#ffffff;
+          padding:6px 10px; min-width:72px; text-align:center; z-index:30;
+          box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
+        }}
+        .det-btn:hover {{ background:#eaffea; }}
+      </style>
+      <img id="roomimg" src="{_img64(room_img)}" alt="{room}" style="display:block; width:100%; height:auto;" />
+      <canvas id="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
+      <div id="shutter" style="position:absolute; right:0; top:0; width:26px; height:100%;
+          background:rgba(15,23,42,.55); transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
+          border-left:2px solid rgba(148,163,184,.5);"></div>
+      {pins_html}
+    </div>
+    <script>
+      (function(){{
+        const canvas = document.getElementById("cloud");
+        const wrap = document.getElementById("roomwrap");
+        const sh = document.getElementById("shutter");
+        if (!canvas || !wrap || !sh) return;
+        const ctx = canvas.getContext("2d");
+        function resize() {{ const r = wrap.getBoundingClientRect(); canvas.width=r.width; canvas.height=r.height; }}
+        resize(); window.addEventListener('resize', resize);
+        function hexToRGBA(hex, a) {{
+          const c=hex.replace('#',''); const r=parseInt(c.substring(0,2),16);
+          const g=parseInt(c.substring(2,4),16); const b=parseInt(c.substring(4,6),16);
+          return 'rgba('+r+','+g+','+b+','+a+')';
+        }}
+        let t0=null, raf=null;
+        function drawCloud(ts){{
+          if(!t0) t0=ts; const t=(ts-t0)/1000;
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+          for(let i=0;i<28;i++) {{
+            const ang=i*0.25; const rad=20+t*60+i*8;
+            const x=canvas.width*0.55+Math.cos(ang)*rad;
+            const y=canvas.height*0.55+Math.sin(ang)*rad*0.62;
+            const a=Math.max(0,0.55-i*0.02-t*0.07);
+            ctx.beginPath(); ctx.fillStyle=hexToRGBA("{cloud_color}", a);
+            ctx.arc(x,y,32+i*0.8+t*3,0,Math.PI*2); ctx.fill();
+          }}
+          raf=requestAnimationFrame(drawCloud);
+        }}
+        function startCloud(){{ if(raf) cancelAnimationFrame(raf); t0=null; raf=requestAnimationFrame(drawCloud); }}
+        function clearCloud(){{ if(raf) cancelAnimationFrame(raf); ctx.clearRect(0,0,canvas.width,canvas.height); }}
+        function closeShutter(){{ sh.style.transform='translateX(0%)'; setTimeout(()=>{{ sh.style.transform='translateX(110%)'; }}, 6000); }}
+        const autoCloud={auto_cloud};
+        if(autoCloud) startCloud();
+        if ({do_close}) closeShutter();
+        if ({do_vent} || {do_reset}) clearCloud();
+      }})();
+    </script>
+    """
+    components.html(html, height=720, scrolling=False)
+
+# ======================================================
+# 3) Room DATA PANEL (live chart + thresholds + Honeywell + AI)
+# ======================================================
+def render_room_data_panel(images_dir: Path, room: str, selected_detector: str,
+                           simulate: bool = False, ai_force_rule: bool = False,
+                           ops: dict | None = None, brand: dict | None = None):
     colL, colR = st.columns([2, 1], gap="large")
 
     with colL:
-        html = f"""
-        <div id="roomwrap" style="position:relative; width:100%; max-width:1200px; margin:6px 0;
-                                  border:2px solid #0a2342; border-radius:12px; overflow:hidden;
-                                  box-shadow:0 18px 60px rgba(0,0,0,.12);">
-          <style>
-            .det-btn {{
-              position:absolute; transform:translate(-50%,-50%);
-              border:2px solid #22c55e; border-radius:10px; background:#ffffff;
-              padding:6px 10px; min-width:72px; text-align:center; z-index:30;
-              box-shadow:0 0 10px rgba(34,197,94,.35); font-weight:800; color:#0f172a; text-decoration:none;
-            }}
-            .det-btn:hover {{ background:#eaffea; }}
-          </style>
-          <img id="roomimg" src="{_img64(room_img)}" alt="{room}" style="display:block; width:100%; height:auto;" />
-          <canvas id="cloud" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:15;"></canvas>
-          <div id="shutter" style="position:absolute; right:0; top:0; width:26px; height:100%;
-              background:rgba(15,23,42,.55); transform:translateX(110%); transition: transform 1.2s ease; z-index:18;
-              border-left:2px solid rgba(148,163,184,.5);"></div>
-          {pins_html}
-        </div>
-        <script>
-          (function(){{
-            const canvas = document.getElementById("cloud");
-            const wrap = document.getElementById("roomwrap");
-            const sh = document.getElementById("shutter");
-            if (!canvas || !wrap || !sh) return;
-            const ctx = canvas.getContext("2d");
-            function resize() {{ const r = wrap.getBoundingClientRect(); canvas.width=r.width; canvas.height=r.height; }}
-            resize(); window.addEventListener('resize', resize);
-            function hexToRGBA(hex, a) {{
-              const c=hex.replace('#',''); const r=parseInt(c.substring(0,2),16);
-              const g=parseInt(c.substring(2,4),16); const b=parseInt(c.substring(4,6),16);
-              return 'rgba('+r+','+g+','+b+','+a+')';
-            }}
-            let t0=null, raf=null;
-            function drawCloud(ts){{
-              if(!t0) t0=ts; const t=(ts-t0)/1000;
-              ctx.clearRect(0,0,canvas.width,canvas.height);
-              for(let i=0;i<28;i++) {{
-                const ang=i*0.25; const rad=20+t*60+i*8;
-                const x=canvas.width*0.55+Math.cos(ang)*rad;
-                const y=canvas.height*0.55+Math.sin(ang)*rad*0.62;
-                const a=Math.max(0,0.55-i*0.02-t*0.07);
-                ctx.beginPath(); ctx.fillStyle=hexToRGBA("{cloud_color}", a);
-                ctx.arc(x,y,32+i*0.8+t*3,0,Math.PI*2); ctx.fill();
-              }}
-              raf=requestAnimationFrame(drawCloud);
-            }}
-            function startCloud(){{ if(raf) cancelAnimationFrame(raf); t0=null; raf=requestAnimationFrame(drawCloud); }}
-            function clearCloud(){{ if(raf) cancelAnimationFrame(raf); ctx.clearRect(0,0,canvas.width,canvas.height); }}
-            function closeShutter(){{ sh.style.transform='translateX(0%)'; setTimeout(()=>{{ sh.style.transform='translateX(110%)'; }}, 6000); }}
-            const autoCloud={auto_cloud};
-            if(autoCloud) startCloud();
-            if ({do_close}) closeShutter();
-            if ({do_vent} || {do_reset}) clearCloud();
-          }})();
-        </script>
-        """
-        components.html(html, height=720, scrolling=False)
-
-        # Fallback detector list (reliable if overlay is blocked)
-        st.markdown("**Detectors**")
-        fb_cols = st.columns(len(dets) if dets else 1)
-        for i, d in enumerate(dets):
-            with fb_cols[i]:
-                if st.button(d["label"], key=f"fb_det_{room}_{d['label']}"):
-                    st.session_state["selected_detector"] = d["label"]
-                    st.query_params.update({"room": room, "det": d["label"]})
-                    st.rerun()
-
-    # Right-hand panel: live chart + thresholds + Honeywell + AI
-    with colR:
-        if not selected_detector:
-            st.info("Click a detector on the image (or the buttons) to view live data.")
-            return
-
-        st.subheader(f"📈 {selected_detector} — Live Trend")
-        period = st.radio("Range", ["Last 10 min","Last 1 h","Today","7 days"], horizontal=True,
-                          key=f"rng_{room}_{selected_detector}")
+        st.subheader(f"📈 {room} — {selected_detector} Trend")
+        period = st.radio("Range", ["Last 10 min","Last 1 h","Today","7 days"],
+                          horizontal=True, key=f"rng_{room}_{selected_detector}")
         now = int(time.time())
         if period == "Last 10 min": start = now - 10*60
-        elif period == "Last 1 h": start = now - 60*60
-        elif period == "Today": start = int(pd.Timestamp("today").replace(hour=0, minute=0, second=0).timestamp())
-        else: start = now - 7*24*3600
+        elif period == "Last 1 h":  start = now - 60*60
+        elif period == "Today":     start = int(pd.Timestamp("today").replace(hour=0, minute=0, second=0).timestamp())
+        else:                       start = now - 7*24*3600
 
         df = history.fetch_series(room, selected_detector, start, now)
         if df.empty:
             st.info("No data yet.")
         else:
-            # simple projection (5 min)
+            # simple 5-min projection
             recent = df.tail(15)
             slope = 0.0
             if len(recent) >= 2:
@@ -304,7 +285,7 @@ def render_room(
             if rec := HONEYWELL_REC.get(selected_detector):
                 st.caption(f"Recommended hardware: {rec}")
 
-            # AI auto‑log on status change
+            # AI auto-log on status change
             key = f"{room}::{selected_detector}"
             last_status = st.session_state.setdefault("last_status", {}).get(key)
             if last_status != status:
@@ -325,7 +306,7 @@ def render_room(
                     {"ts": int(time.time()), "text": answer}
                 )
 
-        st.divider()
+    with colR:
         st.subheader("🤖 AI Safety Assistant")
         if q := st.chat_input("Ask about thresholds, actions or risk…", key=f"chat_{room}"):
             st.chat_message("user").write(q)
@@ -345,10 +326,11 @@ def render_room(
             )
             st.chat_message("ai").write(ans)
 
-# ------------------------------ Live Data helper (used by Live tab)
+# ======================================================
+# 4) Live Data helper (used by the Live tab)
+# ======================================================
 def render_live_only(images_dir: Path, room: str, selected_detector: str,
                      simulate=False, ai_force_rule=False, ops=None, brand=None):
-    # identical visual as in the room panel, minus the image/pins.
     colL, colR = st.columns([2,1], gap="large")
     with colL:
         st.subheader(f"📈 {room} — {selected_detector} Trend")
@@ -381,7 +363,7 @@ def render_live_only(images_dir: Path, room: str, selected_detector: str,
             ans = ai.ask_ai(q, context={"room": room, "gas": selected_detector}, force_rule=ai_force_rule)
             st.chat_message("ai").write(ans)
 
-# ------------------------------ status logic
+# ---------- status logic ----------
 def _status_for(label: str, value: float) -> tuple[str, str]:
     thr = THRESHOLDS.get(label)
     if not thr:
@@ -395,7 +377,7 @@ def _status_for(label: str, value: float) -> tuple[str, str]:
         if value >= thr["warn"]:  return "WARN",  f"{label} elevated ({value:.2f}{thr['units']})."
         return "OK", f"{label} normal ({value:.2f}{thr['units']})."
 
-# ------------------------------ snapshot & export
+# ---------- snapshot & export ----------
 def build_facility_snapshot() -> dict:
     snap = {}
     for room, dets in DETECTORS.items():
@@ -419,6 +401,7 @@ def export_incident_html(logs: dict, brand: dict | None = None) -> str:
         for e in entries:
             out.append(f"<div>{ts_str(e['ts'])} — {e['text']}</div>")
     return "<html><body>" + "\n".join(out) + "</body></html>"
+
 
 
 
