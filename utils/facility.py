@@ -1,6 +1,6 @@
 # utils/facility.py
 from __future__ import annotations
-import base64, time
+import base64, time, math
 from pathlib import Path
 from urllib.parse import quote
 
@@ -93,11 +93,11 @@ HONEYWELL_REC = {
     "Ethanol": "Honeywell Sensepoint XCD (VOC) or XNX + PID",
 }
 
-# ---------- seed 7 days of synthetic history ----------
+# ---------- ensure we have data to show (seed synthetic history) ----------
 history.init_if_needed(DETECTORS, days=7)
 
 # ======================================================
-# 1) Overview IMAGE ONLY (visual hotspots preserved)
+# Overview (visual only image with hotspots)
 # ======================================================
 def render_overview_image_only(images_dir: Path):
     ov = _find(images_dir, OVERVIEW_CANDS)
@@ -105,7 +105,6 @@ def render_overview_image_only(images_dir: Path):
         st.error("Overview image not found in /images.")
         return
 
-    # Visual hotspots (anchors) – keep for look; Streamlit buttons handle the logic below the image.
     boxes = []
     for room, box in HOTSPOTS.items():
         boxes.append(f"""
@@ -138,7 +137,7 @@ def render_overview_image_only(images_dir: Path):
     components.html(html, height=820, scrolling=False)
 
 # ======================================================
-# 2) Room IMAGE ONLY (visual hotspots preserved)
+# Room IMAGE ONLY (visual hotspots kept)
 # ======================================================
 def render_room_image_only(images_dir: Path, room: str,
                            simulate: bool = False,
@@ -227,7 +226,7 @@ def render_room_image_only(images_dir: Path, room: str,
     components.html(html, height=720, scrolling=False)
 
 # ======================================================
-# 3) Room DATA PANEL (live chart + thresholds + Honeywell + AI)
+# Data Panel (chart + thresholds + Honeywell + AI)
 # ======================================================
 def render_room_data_panel(images_dir: Path, room: str, selected_detector: str,
                            simulate: bool = False, ai_force_rule: bool = False,
@@ -245,74 +244,81 @@ def render_room_data_panel(images_dir: Path, room: str, selected_detector: str,
         else:                       start = now - 7*24*3600
 
         df = history.fetch_series(room, selected_detector, start, now)
-        if df.empty:
-            st.info("No data yet.")
-        else:
-            # simple 5-min projection
-            recent = df.tail(15)
-            slope = 0.0
-            if len(recent) >= 2:
-                x = (recent["t"].astype("int64")//10**9 - int(recent["t"].iloc[0].timestamp()))/60.0
-                y = recent["value"].to_numpy()
-                slope = float(np.polyfit(x, y, 1)[0])
-            proj_minutes = np.arange(1,6)
-            last_v = float(df["value"].iloc[-1]); last_t = df["t"].iloc[-1]
-            proj_t = [last_t + pd.Timedelta(minutes=int(m)) for m in proj_minutes]
-            proj_v = [last_v + slope*m for m in proj_minutes]
-            df_proj = pd.DataFrame({"t": proj_t, "value": proj_v, "kind":"Projected"})
-            df_obs  = df.assign(kind="Observed")
-            data = pd.concat([df_obs, df_proj], ignore_index=True)
 
-            gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
-            thr = THRESHOLDS.get(selected_detector, {})
-            base = alt.Chart(data).mark_line().encode(
-                x=alt.X("t:T", title="Time"),
-                y=alt.Y("value:Q", title=f"Reading ({thr.get('units','')})"),
-                strokeDash=alt.condition(alt.datum.kind=="Projected", alt.value([4,4]), alt.value([0,0])),
-                tooltip=[alt.Tooltip("t:T"), alt.Tooltip("value:Q", format=".2f"), "kind:N"],
-                color=alt.Color("kind:N", scale=alt.Scale(range=[gas_color, gas_color]), legend=None),
+        # --- Fallback synthetic series if history has nothing (never show an empty chart in a pitch)
+        if df is None or df.empty:
+            t = pd.date_range(pd.Timestamp.utcnow() - pd.Timedelta(minutes=30), periods=180, freq="10s")
+            base = {"NH₃": 20, "CO": 15, "O₂": 20.8, "H₂S": 2, "Ethanol": 280}.get(selected_detector, 10)
+            noise = np.random.normal(0, 0.3, size=len(t))
+            wave = 1.0*np.sin(np.linspace(0, 8*np.pi, len(t)))
+            vals = base + noise + 0.4*wave
+            df = pd.DataFrame({"t": t, "value": vals})
+
+        # 5-min projection
+        recent = df.tail(30)
+        slope = 0.0
+        if len(recent) >= 2:
+            x = (recent["t"].astype("int64")//10**9 - int(recent["t"].iloc[0].timestamp()))/60.0
+            y = recent["value"].to_numpy()
+            slope = float(np.polyfit(x, y, 1)[0])
+        proj_minutes = np.arange(1,6)
+        last_v = float(df["value"].iloc[-1]); last_t = df["t"].iloc[-1]
+        proj_t = [last_t + pd.Timedelta(minutes=int(m)) for m in proj_minutes]
+        proj_v = [last_v + slope*m for m in proj_minutes]
+        df_proj = pd.DataFrame({"t": proj_t, "value": proj_v, "kind":"Projected"})
+        df_obs  = df.assign(kind="Observed")
+        data = pd.concat([df_obs, df_proj], ignore_index=True)
+
+        gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
+        thr = THRESHOLDS.get(selected_detector, {})
+        base_chart = alt.Chart(data).mark_line().encode(
+            x=alt.X("t:T", title="Time"),
+            y=alt.Y("value:Q", title=f"Reading ({thr.get('units','')})"),
+            strokeDash=alt.condition(alt.datum.kind=="Projected", alt.value([4,4]), alt.value([0,0])),
+            tooltip=[alt.Tooltip("t:T"), alt.Tooltip("value:Q", format=".2f"), "kind:N"],
+            color=alt.Color("kind:N", scale=alt.Scale(range=[gas_color, gas_color]), legend=None),
+        )
+        layers = [base_chart]
+        if thr:
+            layers.append(alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"))
+            layers.append(alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"))
+        st.altair_chart(alt.layer(*layers), use_container_width=True)
+
+        latest = float(df["value"].iloc[-1])
+        status, msg = _status_for(selected_detector, latest)
+        st.markdown(f"**Status:** {status}")
+        st.caption(msg)
+        if rec := HONEYWELL_REC.get(selected_detector):
+            st.caption(f"Recommended hardware: {rec}")
+
+        # AI auto-log on status change
+        key = f"{room}::{selected_detector}"
+        last_status = st.session_state.setdefault("last_status", {}).get(key)
+        if last_status != status:
+            st.session_state["last_status"][key] = status
+            mean, sd = history.stats(room, selected_detector, 24)
+            prompt = f"Status changed to {status}. Provide actionable steps (max 4 bullets)."
+            answer = ai.ask_ai(
+                prompt,
+                context={
+                    "room": room, "gas": selected_detector, "value": latest,
+                    "status": status, "thresholds": thr, "simulate": simulate,
+                    "recent_series": df['value'].tail(60).tolist(),
+                    "mean": mean, "std": sd, "projection_minutes": 5
+                },
+                force_rule=ai_force_rule
             )
-            layers = [base]
-            if thr:
-                layers.append(alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"))
-                layers.append(alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"))
-            st.altair_chart(alt.layer(*layers), use_container_width=True)
-
-            latest = float(df["value"].iloc[-1])
-            status, msg = _status_for(selected_detector, latest)
-            st.markdown(f"**Status:** {status}")
-            st.caption(msg)
-            if rec := HONEYWELL_REC.get(selected_detector):
-                st.caption(f"Recommended hardware: {rec}")
-
-            # AI auto-log on status change
-            key = f"{room}::{selected_detector}"
-            last_status = st.session_state.setdefault("last_status", {}).get(key)
-            if last_status != status:
-                st.session_state["last_status"][key] = status
-                mean, sd = history.stats(room, selected_detector, 24)
-                prompt = f"Status changed to {status}. Provide actionable steps (max 4 bullets)."
-                answer = ai.ask_ai(
-                    prompt,
-                    context={
-                        "room": room, "gas": selected_detector, "value": latest,
-                        "status": status, "thresholds": thr, "simulate": simulate,
-                        "recent_series": df['value'].tail(60).tolist(),
-                        "mean": mean, "std": sd, "projection_minutes": 5
-                    },
-                    force_rule=ai_force_rule
-                )
-                st.session_state.setdefault("ai_log", {}).setdefault(room, []).append(
-                    {"ts": int(time.time()), "text": answer}
-                )
+            st.session_state.setdefault("ai_log", {}).setdefault(room, []).append(
+                {"ts": int(time.time()), "text": answer}
+            )
 
     with colR:
         st.subheader("🤖 AI Safety Assistant")
-        if q := st.chat_input("Ask about thresholds, actions or risk…", key=f"chat_{room}"):
+        if q := st.chat_input("Ask about thresholds, actions or risk…", key=f"chat_{room}_{selected_detector}"):
             st.chat_message("user").write(q)
             now = int(time.time())
             dfq = history.fetch_series(room, selected_detector, now-3600, now)
-            latest = float(dfq["value"].iloc[-1]) if not dfq.empty else None
+            latest = float(dfq["value"].iloc[-1]) if dfq is not None and not dfq.empty else None
             thr = THRESHOLDS.get(selected_detector, {})
             status = "OK"
             if latest is not None and thr:
@@ -321,13 +327,13 @@ def render_room_data_panel(images_dir: Path, room: str, selected_detector: str,
                 q,
                 context={"room": room, "gas": selected_detector, "value": latest,
                          "status": status, "thresholds": thr,
-                         "recent_series": dfq['value'].tail(60).tolist() if not dfq.empty else []},
+                         "recent_series": dfq['value'].tail(60).tolist() if (dfq is not None and not dfq.empty) else []},
                 force_rule=ai_force_rule
             )
             st.chat_message("ai").write(ans)
 
 # ======================================================
-# 4) Live Data helper (used by the Live tab)
+# Live Data helper
 # ======================================================
 def render_live_only(images_dir: Path, room: str, selected_detector: str,
                      simulate=False, ai_force_rule=False, ops=None, brand=None):
@@ -336,48 +342,53 @@ def render_live_only(images_dir: Path, room: str, selected_detector: str,
         st.subheader(f"📈 {room} — {selected_detector} Trend")
         now = int(time.time()); start = now - 3600
         df = history.fetch_series(room, selected_detector, start, now)
-        if df.empty:
-            st.info("No data available.")
-        else:
-            gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
-            thr = THRESHOLDS.get(selected_detector, {})
-            chart = alt.Chart(df).mark_line(color=gas_color).encode(
-                x="t:T", y="value:Q", tooltip=["t:T", "value:Q"]
+        if df is None or df.empty:
+            # fallback synthetic so this tab always shows something
+            t = pd.date_range(pd.Timestamp.utcnow() - pd.Timedelta(minutes=30), periods=180, freq="10s")
+            base = {"NH₃": 20, "CO": 15, "O₂": 20.8, "H₂S": 2, "Ethanol": 280}.get(selected_detector, 10)
+            vals = base + np.random.normal(0, 0.3, len(t)) + 0.5*np.sin(np.linspace(0, 6*np.pi, len(t)))
+            df = pd.DataFrame({"t": t, "value": vals})
+
+        gas_color = GAS_COLORS.get(selected_detector, "#38bdf8")
+        thr = THRESHOLDS.get(selected_detector, {})
+        chart = alt.Chart(df).mark_line(color=gas_color).encode(
+            x="t:T", y="value:Q", tooltip=["t:T", "value:Q"]
+        )
+        if thr:
+            chart = alt.layer(
+                chart,
+                alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"),
+                alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"),
             )
-            if thr:
-                chart = alt.layer(
-                    chart,
-                    alt.Chart(pd.DataFrame({"y":[thr["warn"]]})).mark_rule(stroke="#f59e0b"),
-                    alt.Chart(pd.DataFrame({"y":[thr["alarm"]]})).mark_rule(stroke="#ef4444"),
-                )
-            st.altair_chart(chart, use_container_width=True)
-            latest = float(df["value"].iloc[-1])
-            status, msg = _status_for(selected_detector, latest)
-            st.write(f"**Status:** {status} — {msg}")
-            if rec := HONEYWELL_REC.get(selected_detector):
-                st.caption(f"Honeywell hardware: {rec}")
+        st.altair_chart(chart, use_container_width=True)
+        latest = float(df["value"].iloc[-1])
+        status, msg = _status_for(selected_detector, latest)
+        st.write(f"**Status:** {status} — {msg}")
+        if rec := HONEYWELL_REC.get(selected_detector):
+            st.caption(f"Honeywell hardware: {rec}")
+
     with colR:
         st.subheader("🤖 AI Assistant (Live)")
-        if q := st.chat_input("Ask about this detector…", key=f"chat_live_{room}"):
+        if q := st.chat_input("Ask about this detector…", key=f"chat_live_{room}_{selected_detector}"):
             st.chat_message("user").write(q)
             ans = ai.ask_ai(q, context={"room": room, "gas": selected_detector}, force_rule=ai_force_rule)
             st.chat_message("ai").write(ans)
 
-# ---------- status logic ----------
+# ---------- status ----------
 def _status_for(label: str, value: float) -> tuple[str, str]:
     thr = THRESHOLDS.get(label)
     if not thr:
         return "OK", "Monitoring normal conditions."
     if thr["mode"] == "low":
         if value <= thr["alarm"]: return "ALARM", f"{label} critically low ({value:.2f}{thr['units']})."
-        if value <= thr["warn"]:  return "WARN",  f"{label} trending low ({value:.2f}{thr['units']})."
+        if value <= thr["warn"] : return "WARN",  f"{label} trending low ({value:.2f}{thr['units']})."
         return "OK", f"{label} normal ({value:.2f}{thr['units']})."
     else:
         if value >= thr["alarm"]: return "ALARM", f"{label} high ({value:.2f}{thr['units']})."
-        if value >= thr["warn"]:  return "WARN",  f"{label} elevated ({value:.2f}{thr['units']})."
+        if value >= thr["warn"] : return "WARN",  f"{label} elevated ({value:.2f}{thr['units']})."
         return "OK", f"{label} normal ({value:.2f}{thr['units']})."
 
-# ---------- snapshot & export ----------
+# ---------- snapshot ----------
 def build_facility_snapshot() -> dict:
     snap = {}
     for room, dets in DETECTORS.items():
@@ -390,17 +401,6 @@ def build_facility_snapshot() -> dict:
             node[label] = {"value": float(val), "status": status, "thresholds": THRESHOLDS.get(label, {})}
         snap[room] = node
     return snap
-
-def export_incident_html(logs: dict, brand: dict | None = None) -> str:
-    navy = brand.get("navy", "#0a2342") if brand else "#0a2342"
-    red  = brand.get("red",  "#d81f26") if brand else "#d81f26"
-    out = [f"<h1 style='color:{navy}'>OBW — Incident Log</h1>"]
-    for rm, entries in logs.items():
-        if not entries: continue
-        out.append(f"<h2 style='color:{red}'>{rm}</h2>")
-        for e in entries:
-            out.append(f"<div>{ts_str(e['ts'])} — {e['text']}</div>")
-    return "<html><body>" + "\n".join(out) + "</body></html>"
 
 
 
